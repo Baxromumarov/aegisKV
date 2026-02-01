@@ -1,4 +1,4 @@
-.PHONY: build test test-cover test-unit test-integration test-process test-chaos bench bench-cluster clean run docker-build docker-up docker-down docker-test docker-logs
+.PHONY: build test test-cover test-unit test-integration test-process test-chaos test-robustness bench bench-cluster clean run docker-build docker-up docker-down docker-test docker-logs
 
 # Build variables
 BINARY_NAME=aegis
@@ -69,6 +69,31 @@ test-chaos-long: build
 test-chaos-extended: build
 	@echo "Running chaos test (30 minutes)..."
 	$(GOTEST) -v -timeout 2400s ./tests/chaos/... -run TestChaosExtended
+
+# Robustness testing (WAL crash tests, invariants, failure patterns)
+test-robustness: build
+	@echo "Running robustness tests (WAL crash, invariants, failure patterns)..."
+	$(GOTEST) -v -timeout 600s ./tests/robustness/...
+
+# WAL crash tests with SIGKILL
+test-wal-crash: build
+	@echo "Running WAL crash recovery tests..."
+	$(GOTEST) -v -timeout 300s ./tests/robustness/... -run "TestWAL.*"
+
+# Invariant assertion tests
+test-invariants: build
+	@echo "Running invariant assertion tests..."
+	$(GOTEST) -v -timeout 300s ./tests/robustness/... -run "Test(ReadYourWrites|MonotonicReads|NoPhantomReads)"
+
+# Chaos under load
+test-chaos-load: build
+	@echo "Running chaos under load test (2 minutes)..."
+	$(GOTEST) -v -timeout 300s ./tests/robustness/... -run TestChaosUnderLoad
+
+# Failure pattern tests
+test-failure-patterns: build
+	@echo "Running failure pattern tests..."
+	$(GOTEST) -v -timeout 600s ./tests/robustness/... -run "Test(LeaderFailover|CascadingFailures|NetworkPartition|RapidRestart)"
 
 # Run tests with coverage
 test-cover:

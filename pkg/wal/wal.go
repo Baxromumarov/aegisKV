@@ -128,7 +128,13 @@ func (w *WAL) Append(rec *Record) error {
 	}
 	w.fileSize += int64(n)
 
-	if w.mode == types.WALModeFsync {
+	// For Write mode: flush to kernel buffer (survives process crash, not power loss)
+	// For Fsync mode: flush + sync to disk (survives power loss)
+	if w.mode == types.WALModeWrite {
+		if err := w.writer.Flush(); err != nil {
+			return fmt.Errorf("failed to flush WAL: %w", err)
+		}
+	} else if w.mode == types.WALModeFsync {
 		if err := w.writer.Flush(); err != nil {
 			return fmt.Errorf("failed to flush WAL: %w", err)
 		}
