@@ -72,8 +72,8 @@ func (hr *HashRing) AddNodeWithWeight(nodeID, addr string, weight int) {
 	numVNodes := hr.replicas * weight
 	vnodes := make([]Hash, 0, numVNodes)
 
-	for i := 0; i < numVNodes; i++ {
-		vkey := []byte(fmt.Sprintf("%s#%d", nodeID, i))
+	for i := range numVNodes {
+		vkey := fmt.Appendf(nil, "%s#%d", nodeID, i)
 		hash := hashKey(vkey)
 		vnodes = append(vnodes, hash)
 		hr.vnodeToNode[hash] = nodeID

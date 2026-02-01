@@ -1,11 +1,13 @@
 package gossip
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/baxromumarov/aegisKV/pkg/types"
@@ -122,16 +124,29 @@ func New(cfg Config) (*Gossip, error) {
 
 // Start starts the gossip protocol.
 func (g *Gossip) Start() error {
-	addr, err := net.ResolveUDPAddr("udp", g.bindAddr)
-	if err != nil {
-		return fmt.Errorf("failed to resolve address: %w", err)
+	// Use ListenConfig with SO_REUSEADDR to allow quick restarts
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var opErr error
+			if err := c.Control(func(fd uintptr) {
+				opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				if opErr == nil {
+					// SO_REUSEPORT (15 on Linux) allows binding to same port if previous process crashed
+					const SO_REUSEPORT = 15
+					syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_REUSEPORT, 1) // Ignore error
+				}
+			}); err != nil {
+				return err
+			}
+			return opErr
+		},
 	}
 
-	conn, err := net.ListenUDP("udp", addr)
+	pc, err := lc.ListenPacket(context.Background(), "udp", g.bindAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
 	}
-	g.conn = conn
+	g.conn = pc.(*net.UDPConn)
 
 	// Add self to member list
 	g.mu.Lock()
@@ -327,6 +342,7 @@ func (g *Gossip) handleAck(msg *Message) {
 
 // handlePingReq handles PING-REQ messages for indirect pings.
 func (g *Gossip) handlePingReq(msg *Message, from *net.UDPAddr) {
+	_ = from
 	if msg.ToNodeID == "" {
 		return
 	}
@@ -358,6 +374,7 @@ func (g *Gossip) handleSync(msg *Message) {
 
 // handleJoin handles JOIN messages.
 func (g *Gossip) handleJoin(msg *Message, from *net.UDPAddr) {
+	_ = from
 	if msg.NodeInfo == nil {
 		return
 	}

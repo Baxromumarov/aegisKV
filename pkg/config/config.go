@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/baxromumarov/aegisKV/pkg/types"
@@ -147,6 +148,10 @@ func (c *Config) Validate() error {
 	}
 	if c.EvictionRatio <= 0 || c.EvictionRatio > 1 {
 		c.EvictionRatio = 0.9
+	}
+	// Ensure WALDir is derived from DataDir if not explicitly set
+	if c.WALDir == "" || c.WALDir == "./data/wal" {
+		c.WALDir = filepath.Join(c.DataDir, "wal")
 	}
 
 	return nil

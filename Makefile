@@ -1,4 +1,4 @@
-.PHONY: build test test-cover test-unit test-integration bench bench-cluster clean run docker-build docker-up docker-down docker-test docker-logs
+.PHONY: build test test-cover test-unit test-integration test-process test-chaos bench bench-cluster clean run docker-build docker-up docker-down docker-test docker-logs
 
 # Build variables
 BINARY_NAME=aegis
@@ -34,6 +34,41 @@ test-unit:
 test-integration:
 	@echo "Running integration tests (5-10 node clusters)..."
 	$(GOTEST) -v -timeout 300s ./tests/integration/...
+
+# Run process-level tests (real OS processes)
+test-process: build
+	@echo "Running process-level tests (real OS processes)..."
+	$(GOTEST) -v -timeout 600s ./tests/process/...
+
+# Run a specific process test
+test-process-basic: build
+	@echo "Running basic cluster formation test..."
+	$(GOTEST) -v -timeout 120s ./tests/process/... -run TestBasicClusterFormation
+
+test-process-crash: build
+	@echo "Running crash and recovery test..."
+	$(GOTEST) -v -timeout 180s ./tests/process/... -run TestNodeCrashAndRecovery
+
+test-process-durability: build
+	@echo "Running data durability test..."
+	$(GOTEST) -v -timeout 180s ./tests/process/... -run TestDataDurabilityWithWAL
+
+# Chaos testing (randomized failure injection)
+test-chaos: build
+	@echo "Running chaos test (1 minute)..."
+	$(GOTEST) -v -timeout 300s ./tests/chaos/... -run TestChaosShort
+
+test-chaos-medium: build
+	@echo "Running chaos test (5 minutes)..."
+	$(GOTEST) -v -timeout 600s ./tests/chaos/... -run TestChaosMedium
+
+test-chaos-long: build
+	@echo "Running chaos test (15 minutes)..."
+	$(GOTEST) -v -timeout 1200s ./tests/chaos/... -run TestChaosLong
+
+test-chaos-extended: build
+	@echo "Running chaos test (30 minutes)..."
+	$(GOTEST) -v -timeout 2400s ./tests/chaos/... -run TestChaosExtended
 
 # Run tests with coverage
 test-cover:
@@ -194,6 +229,18 @@ help:
 	@echo "  make test             Run all tests"
 	@echo "  make test-unit        Run unit tests only (fast)"
 	@echo "  make test-integration Run integration tests (multi-node)"
+	@echo "  make test-process     Run process-level tests (real OS processes)"
+	@echo "  make test-process-basic    Run basic cluster formation test"
+	@echo "  make test-process-crash    Run crash and recovery test"
+	@echo "  make test-process-durability Run data durability test"
+	@echo ""
+	@echo "Chaos Testing:"
+	@echo "  make test-chaos       Run chaos test (1 minute)"
+	@echo "  make test-chaos-medium Run chaos test (5 minutes)"
+	@echo "  make test-chaos-long  Run chaos test (15 minutes)"
+	@echo "  make test-chaos-extended Run chaos test (30 minutes)"
+	@echo ""
+	@echo "Other:"
 	@echo "  make test-cover       Run tests with coverage report"
 	@echo "  make bench            Run unit benchmarks"
 	@echo "  make bench-cluster    Run cluster benchmarks (5-10 nodes)"

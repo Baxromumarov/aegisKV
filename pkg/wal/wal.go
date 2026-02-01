@@ -62,6 +62,22 @@ func New(dir string, mode types.WALMode, maxFileSize int64) (*WAL, error) {
 		maxFileSize: maxFileSize,
 	}
 
+	// Find existing WAL files to determine the highest sequence number
+	files, err := filepath.Glob(filepath.Join(dir, "wal-*.log"))
+	if err == nil && len(files) > 0 {
+		var maxSeq int64
+		for _, f := range files {
+			var seq int64
+			base := filepath.Base(f)
+			if _, err := fmt.Sscanf(base, "wal-%d.log", &seq); err == nil {
+				if seq > maxSeq {
+					maxSeq = seq
+				}
+			}
+		}
+		w.fileSeq = maxSeq
+	}
+
 	if err := w.openNewFile(); err != nil {
 		return nil, err
 	}
@@ -201,6 +217,12 @@ func (w *WAL) replayFile(filename string, handler func(*Record) error) error {
 	for {
 		rec, err := w.decodeRecord(reader)
 		if err == io.EOF {
+			break
+		}
+		if err == io.ErrUnexpectedEOF {
+			// Truncated record at end of file - this happens when a process
+			// is killed during a write. The record is incomplete, so we stop
+			// replaying this file but don't treat it as an error.
 			break
 		}
 		if err != nil {

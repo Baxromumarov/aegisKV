@@ -109,13 +109,15 @@ func New(cfg *config.Config) (*Node, error) {
 
 // Start starts the node.
 func (n *Node) Start() error {
+	// Initialize shards first so WAL recovery can find them
+	n.shardMgr.InitializeShards()
+
+	// Recover from WAL
 	if n.walLog != nil && n.walLog.Mode() != types.WALModeOff {
 		if err := n.recoverFromWAL(); err != nil {
 			return fmt.Errorf("failed to recover from WAL: %w", err)
 		}
 	}
-
-	n.shardMgr.InitializeShards()
 
 	if err := n.gossiper.Start(); err != nil {
 		return fmt.Errorf("failed to start gossip: %w", err)

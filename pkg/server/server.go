@@ -2,11 +2,13 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/baxromumarov/aegisKV/pkg/protocol"
@@ -72,7 +74,25 @@ func New(cfg Config) *Server {
 
 // Start starts the server.
 func (s *Server) Start() error {
-	ln, err := net.Listen("tcp", s.addr)
+	// Use ListenConfig with SO_REUSEADDR to allow quick restarts
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var opErr error
+			if err := c.Control(func(fd uintptr) {
+				opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				if opErr == nil {
+					// SO_REUSEPORT (15 on Linux) allows binding to same port if previous process crashed
+					const SO_REUSEPORT = 15
+					syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_REUSEPORT, 1) // Ignore error, not all systems support it
+				}
+			}); err != nil {
+				return err
+			}
+			return opErr
+		},
+	}
+
+	ln, err := lc.Listen(context.Background(), "tcp", s.addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
 	}

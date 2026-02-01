@@ -89,6 +89,7 @@ func splitSeeds(seeds string) []string {
 }
 
 func testConnectivity(c *client.Client, seeds []string) {
+	_ = c
 	fmt.Println("--- Testing Connectivity ---")
 
 	for _, seed := range seeds {
