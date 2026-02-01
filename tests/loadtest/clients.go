@@ -31,7 +31,7 @@ func NewAegisClient(addrs []string) *AegisClient {
 		timeout: 5 * time.Second,
 	}
 	c.pool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			conn, err := c.dial()
 			if err != nil {
 				return nil
@@ -176,7 +176,7 @@ func NewRedisClient(addr string) *RedisClient {
 		timeout: 5 * time.Second,
 	}
 	c.pool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			conn, err := net.DialTimeout("tcp", addr, c.timeout)
 			if err != nil {
 				return nil
@@ -300,7 +300,7 @@ func NewMemcachedClient(addr string) *MemcachedClient {
 		timeout: 5 * time.Second,
 	}
 	c.pool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			conn, err := net.DialTimeout("tcp", addr, c.timeout)
 			if err != nil {
 				return nil

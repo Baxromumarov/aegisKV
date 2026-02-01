@@ -52,7 +52,7 @@ func (c *Checker) SetViolationCallback(fn func(v Violation)) {
 
 // Check checks an invariant condition.
 // If the condition is false, it records a violation.
-func (c *Checker) Check(name string, condition bool, format string, args ...interface{}) bool {
+func (c *Checker) Check(name string, condition bool, format string, args ...any) bool {
 	atomic.AddInt64(&c.totalChecks, 1)
 
 	if condition {
@@ -91,7 +91,7 @@ func (c *Checker) Check(name string, condition bool, format string, args ...inte
 }
 
 // CheckNoPanic checks an invariant but never panics (for soft checks).
-func (c *Checker) CheckNoPanic(name string, condition bool, format string, args ...interface{}) bool {
+func (c *Checker) CheckNoPanic(name string, condition bool, format string, args ...any) bool {
 	atomic.AddInt64(&c.totalChecks, 1)
 
 	if condition {
@@ -127,11 +127,11 @@ func (c *Checker) Violations() []Violation {
 }
 
 // Stats returns checker statistics.
-func (c *Checker) Stats() map[string]interface{} {
+func (c *Checker) Stats() map[string]any {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return map[string]interface{}{
+	return map[string]any{
 		"total_checks":    atomic.LoadInt64(&c.totalChecks),
 		"failed_checks":   atomic.LoadInt64(&c.failedCheck),
 		"violation_count": len(c.violations),
