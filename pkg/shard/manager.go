@@ -21,7 +21,7 @@ type Manager struct {
 	shards            map[uint64]*Shard
 	numShards         uint64
 	shardMaxBytes     int64
-	ring              *consistent.HashRing
+	ring              atomic.Pointer[consistent.HashRing]
 	replicationFactor int
 
 	// Immutable snapshot for lock-free reads
@@ -35,9 +35,9 @@ func NewManager(nodeID string, numShards uint64, shardMaxBytes int64, ring *cons
 		shards:            make(map[uint64]*Shard),
 		numShards:         numShards,
 		shardMaxBytes:     shardMaxBytes,
-		ring:              ring,
 		replicationFactor: replicationFactor,
 	}
+	m.ring.Store(ring)
 	m.updateSnapshot()
 	return m
 }
@@ -73,7 +73,11 @@ func (m *Manager) InitializeShards() {
 			sampleKey[i] = byte(start >> (56 - i*8))
 		}
 
-		nodes := m.ring.GetNodes(sampleKey, m.replicationFactor)
+		ring := m.ring.Load()
+		if ring == nil {
+			continue
+		}
+		nodes := ring.GetNodes(sampleKey, m.replicationFactor)
 
 		isPrimaryOrFollower := false
 		isPrimary := false
@@ -108,7 +112,11 @@ func (m *Manager) InitializeShards() {
 // GetShard returns the shard for a given key.
 // Uses lock-free atomic read for maximum performance on hot path.
 func (m *Manager) GetShard(key []byte) (*Shard, error) {
-	hash := m.ring.GetKeyHash(key)
+	ring := m.ring.Load()
+	if ring == nil {
+		return nil, fmt.Errorf("ring not initialized")
+	}
+	hash := ring.GetKeyHash(key)
 	shardID := consistent.GetShardID(hash, m.numShards)
 
 	// Lock-free read from snapshot
@@ -138,7 +146,11 @@ func (m *Manager) GetShardByID(shardID uint64) (*Shard, error) {
 
 // GetPrimaryForKey returns the primary node for a given key.
 func (m *Manager) GetPrimaryForKey(key []byte) string {
-	nodes := m.ring.GetNodes(key, 1)
+	ring := m.ring.Load()
+	if ring == nil {
+		return ""
+	}
+	nodes := ring.GetNodes(key, 1)
 	if len(nodes) > 0 {
 		return nodes[0]
 	}
@@ -147,7 +159,11 @@ func (m *Manager) GetPrimaryForKey(key []byte) string {
 
 // GetReplicasForKey returns all replica nodes for a given key.
 func (m *Manager) GetReplicasForKey(key []byte) []string {
-	return m.ring.GetNodes(key, m.replicationFactor)
+	ring := m.ring.Load()
+	if ring == nil {
+		return nil
+	}
+	return ring.GetNodes(key, m.replicationFactor)
 }
 
 // IsPrimaryFor returns true if this node is the primary for the given key.
@@ -259,15 +275,18 @@ type ManagerStats struct {
 
 // UpdateRing updates the hash ring reference.
 func (m *Manager) UpdateRing(ring *consistent.HashRing) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ring = ring
+	m.ring.Store(ring)
 }
 
 // RecomputeOwnership recomputes shard ownership after ring changes.
 func (m *Manager) RecomputeOwnership() (acquire []uint64, release []uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	ring := m.ring.Load()
+	if ring == nil {
+		return nil, nil
+	}
 
 	for shardID := uint64(0); shardID < m.numShards; shardID++ {
 		start, end := consistent.GetShardRange(shardID, m.numShards)
@@ -276,7 +295,7 @@ func (m *Manager) RecomputeOwnership() (acquire []uint64, release []uint64) {
 			sampleKey[i] = byte(start >> (56 - i*8))
 		}
 
-		nodes := m.ring.GetNodes(sampleKey, m.replicationFactor)
+		nodes := ring.GetNodes(sampleKey, m.replicationFactor)
 
 		shouldOwn := false
 		for _, nodeID := range nodes {

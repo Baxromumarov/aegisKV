@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -326,17 +327,17 @@ func TestGossipAdvertiseAddr(t *testing.T) {
 // TestGossipCallbacks tests join/leave callbacks.
 func TestGossipCallbacks(t *testing.T) {
 	var (
-		joinCalled  bool
-		leaveCalled bool
+		joinCalled  atomic.Bool
+		leaveCalled atomic.Bool
 	)
 
 	cfg1 := testConfig("node-1", 18050)
 	cfg1.OnNodeJoin = func(info types.NodeInfo) {
-		joinCalled = true
+		joinCalled.Store(true)
 		t.Logf("Join callback: %s", info.ID)
 	}
 	cfg1.OnNodeLeave = func(info types.NodeInfo) {
-		leaveCalled = true
+		leaveCalled.Store(true)
 		t.Logf("Leave callback: %s", info.ID)
 	}
 	g1, _ := New(cfg1)
@@ -353,11 +354,11 @@ func TestGossipCallbacks(t *testing.T) {
 	g2.Stop()
 	time.Sleep(150 * time.Millisecond)
 
-	if !joinCalled {
+	if !joinCalled.Load() {
 		t.Log("Join callback was not called (timing dependent)")
 	}
 	// Use leaveCalled to avoid unused variable error
-	_ = leaveCalled
+	_ = leaveCalled.Load()
 }
 
 // Helper functions

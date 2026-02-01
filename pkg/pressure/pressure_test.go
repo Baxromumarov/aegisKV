@@ -98,22 +98,19 @@ func TestCalculateLevelZeroLimit(t *testing.T) {
 func TestOnCallbacks(t *testing.T) {
 	m := NewMonitor(Config{LimitBytes: 1000})
 
-	lowCalled := false
-	mediumCalled := false
-	highCalled := false
-	criticalCalled := false
+	var lowCalled, mediumCalled, highCalled, criticalCalled atomic.Bool
 
 	m.OnLow(func(level Level, used, limit int64) {
-		lowCalled = true
+		lowCalled.Store(true)
 	})
 	m.OnMedium(func(level Level, used, limit int64) {
-		mediumCalled = true
+		mediumCalled.Store(true)
 	})
 	m.OnHigh(func(level Level, used, limit int64) {
-		highCalled = true
+		highCalled.Store(true)
 	})
 	m.OnCritical(func(level Level, used, limit int64) {
-		criticalCalled = true
+		criticalCalled.Store(true)
 	})
 
 	// Trigger critical level - should call all callbacks
@@ -122,16 +119,16 @@ func TestOnCallbacks(t *testing.T) {
 	// Wait for goroutines
 	time.Sleep(50 * time.Millisecond)
 
-	if !lowCalled {
+	if !lowCalled.Load() {
 		t.Error("low callback should be called")
 	}
-	if !mediumCalled {
+	if !mediumCalled.Load() {
 		t.Error("medium callback should be called")
 	}
-	if !highCalled {
+	if !highCalled.Load() {
 		t.Error("high callback should be called")
 	}
-	if !criticalCalled {
+	if !criticalCalled.Load() {
 		t.Error("critical callback should be called")
 	}
 }
@@ -139,14 +136,13 @@ func TestOnCallbacks(t *testing.T) {
 func TestOnCallbacksLevelFiltering(t *testing.T) {
 	m := NewMonitor(Config{LimitBytes: 1000})
 
-	highCalled := false
-	criticalCalled := false
+	var highCalled, criticalCalled atomic.Bool
 
 	m.OnHigh(func(level Level, used, limit int64) {
-		highCalled = true
+		highCalled.Store(true)
 	})
 	m.OnCritical(func(level Level, used, limit int64) {
-		criticalCalled = true
+		criticalCalled.Store(true)
 	})
 
 	// Trigger low level - should not call high or critical
@@ -154,10 +150,10 @@ func TestOnCallbacksLevelFiltering(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if highCalled {
+	if highCalled.Load() {
 		t.Error("high callback should NOT be called for low level")
 	}
-	if criticalCalled {
+	if criticalCalled.Load() {
 		t.Error("critical callback should NOT be called for low level")
 	}
 }

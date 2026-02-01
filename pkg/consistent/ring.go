@@ -2,6 +2,7 @@
 package consistent
 
 import (
+	"maps"
 	"fmt"
 	"sort"
 	"sync"
@@ -57,9 +58,16 @@ func NewHashRing(replicas int) *HashRing {
 
 // updateSnapshot creates and stores an immutable snapshot.
 func (hr *HashRing) updateSnapshot() {
+	// Create deep copies to ensure true immutability
+	ringCopy := make([]ringEntry, len(hr.ring))
+	copy(ringCopy, hr.ring)
+
+	vnodeCopy := make(map[Hash]string, len(hr.vnodeToNode))
+	maps.Copy(vnodeCopy, hr.vnodeToNode)
+
 	snap := &ringSnapshot{
-		ring:        hr.ring,
-		vnodeToNode: hr.vnodeToNode,
+		ring:        ringCopy,
+		vnodeToNode: vnodeCopy,
 	}
 	atomic.StorePointer(&hr.snapshot, unsafe.Pointer(snap))
 }
