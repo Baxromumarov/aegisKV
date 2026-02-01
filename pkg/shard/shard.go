@@ -8,6 +8,7 @@ import (
 
 	"github.com/baxromumarov/aegisKV/pkg/cache"
 	"github.com/baxromumarov/aegisKV/pkg/consistent"
+	"github.com/baxromumarov/aegisKV/pkg/invariant"
 	"github.com/baxromumarov/aegisKV/pkg/types"
 )
 
@@ -64,6 +65,13 @@ func (s *Shard) Set(key string, value []byte, ttlMs int64) (*types.Entry, error)
 		return nil, fmt.Errorf("shard %d cannot accept writes in state %s", s.ID, s.State)
 	}
 
+	// Invariant: MIGRATING_IN shards should not accept direct writes
+	invariant.Global().CheckNoPanic(
+		"MIGRATING_IN_NO_DIRECT_WRITES",
+		s.State != types.ShardStateMigratingIn,
+		"direct write to shard %d in MIGRATING_IN state", s.ID,
+	)
+
 	s.Seq++
 
 	var expiry int64
@@ -95,6 +103,13 @@ func (s *Shard) Delete(key string) (*types.Entry, error) {
 		return nil, fmt.Errorf("shard %d cannot accept writes in state %s", s.ID, s.State)
 	}
 
+	// Invariant: MIGRATING_IN shards should not accept direct writes
+	invariant.Global().CheckNoPanic(
+		"MIGRATING_IN_NO_DIRECT_WRITES",
+		s.State != types.ShardStateMigratingIn,
+		"direct delete on shard %d in MIGRATING_IN state", s.ID,
+	)
+
 	s.Seq++
 
 	entry := s.cache.Delete(key)
@@ -118,8 +133,18 @@ func (s *Shard) ApplyReplicated(entry *types.Entry) bool {
 
 	key := string(entry.Key)
 
+	// Check version ordering (soft check - don't block, just log)
+	existing := s.cache.Get(key)
+	if existing != nil {
+		invariant.Global().CheckNoPanic(
+			"VERSION_ORDERING",
+			entry.Version.IsNewerThan(existing.Version) || entry.Version.Term == existing.Version.Term && entry.Version.Seq == existing.Version.Seq,
+			"shard %d version ordering: existing=%d.%d new=%d.%d",
+			s.ID, existing.Version.Term, existing.Version.Seq, entry.Version.Term, entry.Version.Seq,
+		)
+	}
+
 	if entry.Value == nil {
-		existing := s.cache.Get(key)
 		if existing != nil && !entry.Version.IsNewerThan(existing.Version) {
 			return false
 		}
@@ -134,6 +159,12 @@ func (s *Shard) ApplyReplicated(entry *types.Entry) bool {
 func (s *Shard) SetState(state types.ShardState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Invariant: Check valid state transitions
+	if s.State != state {
+		invariant.Global().CheckShardStateTransition(s.ID, s.State, state)
+	}
+
 	s.State = state
 }
 
@@ -151,6 +182,28 @@ func (s *Shard) IncrementTerm() uint64 {
 	s.Term++
 	s.Seq = 0
 	return s.Term
+}
+
+// SetTermFromReplication updates the term from a replicated value with monotonicity check.
+func (s *Shard) SetTermFromReplication(newTerm uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Invariant: Term should never decrease
+	if newTerm < s.Term {
+		invariant.Global().CheckNoPanic(
+			"TERM_MONOTONIC",
+			false,
+			"shard %d term would decrease from %d to %d", s.ID, s.Term, newTerm,
+		)
+		return false
+	}
+
+	if newTerm > s.Term {
+		s.Term = newTerm
+		s.Seq = 0
+	}
+	return true
 }
 
 // SetPrimary sets the primary node for this shard.

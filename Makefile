@@ -1,4 +1,4 @@
-.PHONY: build test test-cover test-unit test-integration test-process test-chaos test-robustness bench bench-cluster bench-load bench-compare bench-scalability clean run docker-build docker-up docker-down docker-test docker-logs
+.PHONY: build test test-cover test-unit test-integration test-process test-chaos test-robustness bench bench-cluster bench-load bench-compare bench-scalability clean run docker-build docker-up docker-down docker-test docker-logs test-cluster test-cluster-failover test-cluster-wal test-cluster-partition test-cluster-rebalance
 
 # Build variables
 BINARY_NAME=aegis
@@ -157,6 +157,32 @@ bench-all: build
 bench-report: build
 	@echo "Running comprehensive benchmark suite..."
 	./tests/loadtest/run_benchmarks.sh
+
+# Cluster shell script tests (failover, WAL crash, partition, rebalance)
+test-cluster: build
+	@echo "Running all cluster tests..."
+	@chmod +x ./tests/cluster/*.sh
+	./tests/cluster/run_all.sh
+
+test-cluster-failover: build
+	@echo "Running failover test..."
+	@chmod +x ./tests/cluster/failover.sh
+	./tests/cluster/failover.sh
+
+test-cluster-wal: build
+	@echo "Running WAL crash recovery test..."
+	@chmod +x ./tests/cluster/wal_crash.sh
+	./tests/cluster/wal_crash.sh
+
+test-cluster-partition: build
+	@echo "Running network partition test..."
+	@chmod +x ./tests/cluster/partition.sh
+	./tests/cluster/partition.sh
+
+test-cluster-rebalance: build
+	@echo "Running shard rebalance test..."
+	@chmod +x ./tests/cluster/rebalance.sh
+	./tests/cluster/rebalance.sh
 
 # Go benchmarks (micro-benchmarks)
 bench-go: build

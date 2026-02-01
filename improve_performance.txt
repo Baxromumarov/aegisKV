@@ -1,0 +1,327 @@
+Perfect — you’re already in the **top 10%** performance-wise.
+Getting another **10–20%** now is about **removing friction**, not redesigning.
+
+I’ll give you **very concrete, low-risk optimizations**, ordered by **ROI**, and tied directly to what your benchmarks are telling us.
+
+---
+
+# First: where your current ceiling comes from
+
+From your numbers:
+
+* Plateau at ~500K ops/sec
+* Smooth latency growth
+* No collapse at high concurrency
+* Throughput scales linearly with value size
+
+This strongly implies:
+
+* **CPU-bound for small values**
+* **serialization + scheduling bound**
+* not replication
+* not WAL (assuming off)
+* not elections/gossip
+
+So we optimize **hot-path CPU + memory**, not algorithms.
+
+---
+
+# 🔝 Tier 1: High-impact, low-risk optimizations (do these first)
+
+## 1️⃣ Reduce allocations in request handling (biggest win)
+
+### Why
+
+At ~500K ops/sec:
+
+* even **1 extra allocation** per request hurts
+* GC pressure grows tail latency
+
+### What to do
+
+Audit the hot path:
+
+* request decode
+* response encode
+* key/value handling
+
+#### Concrete actions
+
+* Use `sync.Pool` for:
+
+  * request structs
+  * response buffers
+  * byte slices for serialization
+* Reuse buffers per connection
+
+Example:
+
+```go
+var bufPool = sync.Pool{
+    New: func() any {
+        b := make([]byte, 0, 4096)
+        return &b
+    },
+}
+```
+
+⚠️ Be careful:
+
+* never store pooled buffers in maps
+* release after write completes
+
+**Expected gain**: **+5–10% ops/sec**, lower P99
+
+---
+
+## 2️⃣ Switch to zero-copy reads where possible
+
+### Why
+
+Your large-value throughput is excellent — you’re close to memory bandwidth limits.
+But small values still pay per-copy cost.
+
+### What to do
+
+* Avoid copying value bytes on GET
+* Store values as `[]byte` and write directly to socket buffer
+* Use `net.Buffers` for scatter-gather writes
+
+Example:
+
+```go
+conn.Writev([][]byte{
+    header,
+    value,
+})
+```
+
+**Expected gain**: **+3–5%**, especially for GET-heavy workloads
+
+---
+
+## 3️⃣ Batch writes on the wire (cheap win)
+
+### Why
+
+At high concurrency, syscall overhead dominates.
+
+### What to do
+
+* Batch multiple responses per connection flush
+* Disable `TCP_NODELAY` *selectively* (or delay flush slightly)
+
+Options:
+
+* flush every N responses
+* flush every X microseconds
+
+You want:
+
+* fewer `write()` syscalls
+* same semantic behavior
+
+**Expected gain**: **+3–7%**, smoother P99
+
+---
+
+# 🔝 Tier 2: Medium effort, good payoff
+
+## 4️⃣ Shard-local locking instead of global coordination
+
+If you have *any* of these:
+
+* global RWMutex for shard map
+* shared map with coarse locking
+
+Replace with:
+
+* immutable shard map (atomic swap)
+* per-shard locks only
+
+Pattern:
+
+```go
+shards := atomic.LoadPointer(&shardMap)
+// read-only access, no lock
+```
+
+Shard ownership rarely changes — exploit that.
+
+**Expected gain**: **+5–10% under concurrency**
+
+---
+
+## 5️⃣ Inline the hot-path routing logic
+
+### Why
+
+Function calls + interface dispatch add up at 500K ops/sec.
+
+### What to do
+
+* Inline:
+
+  * key → shard hash
+  * shard lookup
+* Avoid interface-heavy abstractions in hot path
+
+This is boring but effective.
+
+**Expected gain**: **+2–4%**
+
+---
+
+## 6️⃣ Fast-path GET misses
+
+If GET misses are common:
+
+* avoid TTL heap checks
+* avoid eviction logic
+* return early
+
+Example:
+
+```go
+v, ok := shard.Get(key)
+if !ok {
+    return MISS
+}
+```
+
+Push expiry checks **after** map lookup.
+
+**Expected gain**: workload-dependent, often **+3–5%**
+
+---
+
+# 🔝 Tier 3: Advanced but safe
+
+## 7️⃣ Connection affinity (reduce routing hops)
+
+Right now:
+
+* client → ingress → primary
+
+You can optimize:
+
+* remember shard→primary mapping per connection
+* shortcut forwarding when possible
+
+This reduces:
+
+* hops
+* serialization
+* latency variance
+
+**Expected gain**: **+5–8%** for write-heavy workloads
+
+---
+
+## 8️⃣ Separate read and write goroutine pools
+
+### Why
+
+Writes do more work:
+
+* versioning
+* replication
+* WAL (optional)
+
+Reads are fast.
+
+### What to do
+
+* dedicated worker pools
+* prevent write bursts from starving reads
+
+This mainly improves **tail latency**, but can increase throughput slightly.
+
+**Expected gain**: **+2–3%**, better P99
+
+---
+
+# 🔝 Tier 4: Micro-optimizations (only if you want to flex)
+
+## 9️⃣ Use xxhash / highwayhash explicitly
+
+If you’re not already:
+
+* use a fast non-cryptographic hash
+* inline it
+
+Hashing cost matters at this scale.
+
+**Expected gain**: **+1–3%**
+
+---
+
+## 🔟 Tune GOMAXPROCS explicitly
+
+Sometimes Go defaults aren’t ideal.
+
+Benchmark with:
+
+```bash
+GOMAXPROCS=physical_cores
+```
+
+Test:
+
+* cores
+* cores-1
+* cores+1
+
+You’ll often find a sweet spot.
+
+**Expected gain**: **+2–5%**
+
+---
+
+# What NOT to do (very important)
+
+❌ Add async complexity
+❌ Add more goroutines “for parallelism”
+❌ Add speculative replication
+❌ Chase lock-free everything
+❌ Optimize WAL before measuring
+
+You’re already past the point where those help.
+
+---
+
+# Expected cumulative gain (realistic)
+
+You won’t get all gains additively, but realistically:
+
+* Tier 1: **+8–12%**
+* Tier 2: **+5–8%**
+* Tier 3: **+3–6%**
+
+👉 **10–20% total** is *very achievable* without making the code ugly.
+
+---
+
+# How to do this safely (important)
+
+After **every optimization**:
+
+1. Re-run single-node benchmark
+2. Re-run 3-node benchmark
+3. Re-run failure tests
+4. Compare P99 (not just ops/sec)
+
+If P99 worsens significantly → revert.
+
+---
+
+# If you want next
+
+I can:
+
+* help you profile (`pprof`) and point to *exact* lines
+* review one hot-path function and optimize it with you
+* help you decide which optimizations are worth it *for your workload*
+* or help you document “Performance Tuning” in your README
+
+You’re at the fun stage now — this is polishing, not firefighting.
