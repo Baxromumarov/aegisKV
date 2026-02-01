@@ -3,25 +3,34 @@ package shard
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/baxromumarov/aegisKV/pkg/consistent"
 	"github.com/baxromumarov/aegisKV/pkg/types"
 )
 
+// shardMap is an immutable map of shards for lock-free reads.
+type shardMap map[uint64]*Shard
+
 // Manager manages all shards for a node.
+// Uses atomic pointer swap for lock-free shard lookups on hot path.
 type Manager struct {
-	mu                sync.RWMutex
+	mu                sync.Mutex // Only for writes
 	nodeID            string
 	shards            map[uint64]*Shard
 	numShards         uint64
 	shardMaxBytes     int64
 	ring              *consistent.HashRing
 	replicationFactor int
+
+	// Immutable snapshot for lock-free reads
+	shardSnapshot unsafe.Pointer // *shardMap
 }
 
 // NewManager creates a new shard manager.
 func NewManager(nodeID string, numShards uint64, shardMaxBytes int64, ring *consistent.HashRing, replicationFactor int) *Manager {
-	return &Manager{
+	m := &Manager{
 		nodeID:            nodeID,
 		shards:            make(map[uint64]*Shard),
 		numShards:         numShards,
@@ -29,6 +38,26 @@ func NewManager(nodeID string, numShards uint64, shardMaxBytes int64, ring *cons
 		ring:              ring,
 		replicationFactor: replicationFactor,
 	}
+	m.updateSnapshot()
+	return m
+}
+
+// updateSnapshot creates an immutable copy for lock-free reads.
+func (m *Manager) updateSnapshot() {
+	snap := make(shardMap, len(m.shards))
+	for k, v := range m.shards {
+		snap[k] = v
+	}
+	atomic.StorePointer(&m.shardSnapshot, unsafe.Pointer(&snap))
+}
+
+// getSnapshot returns the current immutable shard map.
+func (m *Manager) getSnapshot() shardMap {
+	ptr := atomic.LoadPointer(&m.shardSnapshot)
+	if ptr == nil {
+		return nil
+	}
+	return *(*shardMap)(ptr)
 }
 
 // InitializeShards creates all shards this node is responsible for.
@@ -73,33 +102,38 @@ func (m *Manager) InitializeShards() {
 			m.shards[shardID] = shard
 		}
 	}
+	m.updateSnapshot() // Update snapshot after initialization
 }
 
 // GetShard returns the shard for a given key.
+// Uses lock-free atomic read for maximum performance on hot path.
 func (m *Manager) GetShard(key []byte) (*Shard, error) {
 	hash := m.ring.GetKeyHash(key)
 	shardID := consistent.GetShardID(hash, m.numShards)
 
-	m.mu.RLock()
-	shard, ok := m.shards[shardID]
-	m.mu.RUnlock()
-
-	if !ok {
-		return nil, fmt.Errorf("shard %d not found on this node", shardID)
+	// Lock-free read from snapshot
+	snap := m.getSnapshot()
+	if snap != nil {
+		if shard, ok := snap[shardID]; ok {
+			return shard, nil
+		}
 	}
-	return shard, nil
+
+	return nil, fmt.Errorf("shard %d not found on this node", shardID)
 }
 
 // GetShardByID returns a shard by its ID.
+// Uses lock-free atomic read for maximum performance.
 func (m *Manager) GetShardByID(shardID uint64) (*Shard, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	shard, ok := m.shards[shardID]
-	if !ok {
-		return nil, fmt.Errorf("shard %d not found on this node", shardID)
+	// Lock-free read from snapshot
+	snap := m.getSnapshot()
+	if snap != nil {
+		if shard, ok := snap[shardID]; ok {
+			return shard, nil
+		}
 	}
-	return shard, nil
+
+	return nil, fmt.Errorf("shard %d not found on this node", shardID)
 }
 
 // GetPrimaryForKey returns the primary node for a given key.
@@ -123,11 +157,13 @@ func (m *Manager) IsPrimaryFor(key []byte) bool {
 
 // OwnedShards returns all shards this node owns.
 func (m *Manager) OwnedShards() []*Shard {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	snap := m.getSnapshot()
+	if snap == nil {
+		return nil
+	}
 
-	shards := make([]*Shard, 0, len(m.shards))
-	for _, shard := range m.shards {
+	shards := make([]*Shard, 0, len(snap))
+	for _, shard := range snap {
 		shards = append(shards, shard)
 	}
 	return shards
@@ -135,11 +171,13 @@ func (m *Manager) OwnedShards() []*Shard {
 
 // PrimaryShards returns shards where this node is the primary.
 func (m *Manager) PrimaryShards() []*Shard {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	snap := m.getSnapshot()
+	if snap == nil {
+		return nil
+	}
 
 	shards := make([]*Shard, 0)
-	for _, shard := range m.shards {
+	for _, shard := range snap {
 		if shard.Primary == m.nodeID {
 			shards = append(shards, shard)
 		}
@@ -149,11 +187,13 @@ func (m *Manager) PrimaryShards() []*Shard {
 
 // FollowerShards returns shards where this node is a follower.
 func (m *Manager) FollowerShards() []*Shard {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	snap := m.getSnapshot()
+	if snap == nil {
+		return nil
+	}
 
 	shards := make([]*Shard, 0)
-	for _, shard := range m.shards {
+	for _, shard := range snap {
 		if shard.Primary != m.nodeID {
 			shards = append(shards, shard)
 		}
@@ -166,6 +206,7 @@ func (m *Manager) AddShard(shard *Shard) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.shards[shard.ID] = shard
+	m.updateSnapshot()
 }
 
 // RemoveShard removes a shard from the manager.
@@ -176,22 +217,25 @@ func (m *Manager) RemoveShard(shardID uint64) *Shard {
 	shard, ok := m.shards[shardID]
 	if ok {
 		delete(m.shards, shardID)
+		m.updateSnapshot()
 	}
 	return shard
 }
 
 // Stats returns statistics for all managed shards.
 func (m *Manager) Stats() ManagerStats {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	snap := m.getSnapshot()
+	if snap == nil {
+		return ManagerStats{NodeID: m.nodeID}
+	}
 
 	stats := ManagerStats{
 		NodeID:      m.nodeID,
-		TotalShards: len(m.shards),
-		ShardStats:  make([]ShardStats, 0, len(m.shards)),
+		TotalShards: len(snap),
+		ShardStats:  make([]ShardStats, 0, len(snap)),
 	}
 
-	for _, shard := range m.shards {
+	for _, shard := range snap {
 		shardStats := shard.Stats()
 		stats.ShardStats = append(stats.ShardStats, shardStats)
 		if shard.Primary == m.nodeID {
@@ -272,6 +316,7 @@ func (m *Manager) RecomputeOwnership() (acquire []uint64, release []uint64) {
 		}
 	}
 
+	m.updateSnapshot() // Update snapshot after recomputing
 	return acquire, release
 }
 

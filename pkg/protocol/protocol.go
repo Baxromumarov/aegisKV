@@ -201,14 +201,19 @@ func (e *Encoder) EncodeResponse(resp *Response) error {
 type Decoder struct {
 	r      io.Reader
 	lenBuf [4]byte // fixed-size, avoids allocation per decode
+	msgBuf []byte  // reusable message buffer
 }
 
 // NewDecoder creates a new decoder.
 func NewDecoder(r io.Reader) *Decoder {
-	return &Decoder{r: r}
+	return &Decoder{
+		r:      r,
+		msgBuf: make([]byte, 0, 4096), // Pre-allocate common size
+	}
 }
 
 // DecodeRequest decodes a request from the wire format.
+// Reuses internal buffer to minimize allocations.
 func (d *Decoder) DecodeRequest() (*Request, error) {
 	if _, err := io.ReadFull(d.r, d.lenBuf[:]); err != nil {
 		return nil, err
@@ -219,7 +224,14 @@ func (d *Decoder) DecodeRequest() (*Request, error) {
 		return nil, errors.New("message too large")
 	}
 
-	buf := make([]byte, totalLen)
+	// Grow reusable buffer if needed
+	if cap(d.msgBuf) < int(totalLen) {
+		d.msgBuf = make([]byte, totalLen)
+	} else {
+		d.msgBuf = d.msgBuf[:totalLen]
+	}
+	buf := d.msgBuf
+
 	if _, err := io.ReadFull(d.r, buf); err != nil {
 		return nil, err
 	}
@@ -263,6 +275,7 @@ func (d *Decoder) DecodeRequest() (*Request, error) {
 		return nil, errors.New("value too large")
 	}
 
+	// Allocate key and value only (these need to outlive the buffer)
 	req.Key = make([]byte, keyLen)
 	copy(req.Key, buf[offset:offset+int(keyLen)])
 	offset += int(keyLen)

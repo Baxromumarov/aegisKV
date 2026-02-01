@@ -134,7 +134,9 @@ func (c *Cache) Get(key string) *types.Entry {
 		return nil
 	}
 
-	if item.entry.IsExpired() {
+	// Fast path: check expiry inline before upgrading lock
+	entry := item.entry
+	if entry.Expiry > 0 && entry.IsExpired() {
 		c.mu.RUnlock()
 		// Upgrade to write lock to delete expired entry
 		c.mu.Lock()
@@ -155,7 +157,30 @@ func (c *Cache) Get(key string) *types.Entry {
 		// Channel full, skip promotion this time
 	}
 
+	c.mu.RUnlock()
+	atomic.AddUint64(&c.hits, 1)
+	return entry
+}
+
+// GetNoExpiry retrieves an entry without checking expiry (caller handles).
+// Use for hot paths where expiry is checked separately.
+func (c *Cache) GetNoExpiry(key string) *types.Entry {
+	c.mu.RLock()
+	item, ok := c.items[key]
+	if !ok {
+		c.mu.RUnlock()
+		atomic.AddUint64(&c.misses, 1)
+		return nil
+	}
+
 	entry := item.entry
+
+	// Queue LRU promotion (non-blocking)
+	select {
+	case c.promoteCh <- item.element:
+	default:
+	}
+
 	c.mu.RUnlock()
 	atomic.AddUint64(&c.hits, 1)
 	return entry

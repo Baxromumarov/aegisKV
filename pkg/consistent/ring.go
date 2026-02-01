@@ -2,17 +2,20 @@
 package consistent
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
+	"unsafe"
+
+	"github.com/baxromumarov/aegisKV/pkg/fasthash"
 )
 
 // Hash is a 64-bit hash value.
 type Hash uint64
 
 // HashRing implements a consistent hash ring with virtual nodes.
+// Uses atomic pointer swap for lock-free reads on the hot path.
 type HashRing struct {
 	mu           sync.RWMutex
 	ring         []ringEntry
@@ -20,6 +23,15 @@ type HashRing struct {
 	vnodeToNode  map[Hash]string
 	nodeAddrs    map[string]string
 	replicas     int
+
+	// Immutable snapshot for lock-free reads
+	snapshot unsafe.Pointer // *ringSnapshot
+}
+
+// ringSnapshot is an immutable snapshot for lock-free reads.
+type ringSnapshot struct {
+	ring        []ringEntry
+	vnodeToNode map[Hash]string
 }
 
 type ringEntry struct {
@@ -32,18 +44,34 @@ func NewHashRing(replicas int) *HashRing {
 	if replicas < 1 {
 		replicas = 100
 	}
-	return &HashRing{
+	hr := &HashRing{
 		ring:         make([]ringEntry, 0),
 		nodeToVNodes: make(map[string][]Hash),
 		vnodeToNode:  make(map[Hash]string),
 		nodeAddrs:    make(map[string]string),
 		replicas:     replicas,
 	}
+	hr.updateSnapshot()
+	return hr
 }
 
+// updateSnapshot creates and stores an immutable snapshot.
+func (hr *HashRing) updateSnapshot() {
+	snap := &ringSnapshot{
+		ring:        hr.ring,
+		vnodeToNode: hr.vnodeToNode,
+	}
+	atomic.StorePointer(&hr.snapshot, unsafe.Pointer(snap))
+}
+
+// getSnapshot returns the current immutable snapshot.
+func (hr *HashRing) getSnapshot() *ringSnapshot {
+	return (*ringSnapshot)(atomic.LoadPointer(&hr.snapshot))
+}
+
+// hashKey uses fast xxHash for key hashing.
 func hashKey(key []byte) Hash {
-	h := sha256.Sum256(key)
-	return Hash(binary.BigEndian.Uint64(h[:8]))
+	return Hash(fasthash.Sum64(key))
 }
 
 // AddNode adds a node to the ring with virtual nodes.
@@ -82,6 +110,7 @@ func (hr *HashRing) AddNodeWithWeight(nodeID, addr string, weight int) {
 
 	hr.nodeToVNodes[nodeID] = vnodes
 	hr.sortRing()
+	hr.updateSnapshot() // Update immutable snapshot for lock-free reads
 }
 
 // RemoveNode removes a node and all its virtual nodes from the ring.
@@ -107,6 +136,7 @@ func (hr *HashRing) RemoveNode(nodeID string) {
 	hr.ring = newRing
 	delete(hr.nodeToVNodes, nodeID)
 	delete(hr.nodeAddrs, nodeID)
+	hr.updateSnapshot() // Update immutable snapshot
 }
 
 func (hr *HashRing) sortRing() {
@@ -116,36 +146,45 @@ func (hr *HashRing) sortRing() {
 }
 
 // GetNode returns the node responsible for a given key.
+// Uses lock-free atomic snapshot read for maximum performance.
 func (hr *HashRing) GetNode(key []byte) string {
-	hr.mu.RLock()
-	defer hr.mu.RUnlock()
-
-	if len(hr.ring) == 0 {
+	snap := hr.getSnapshot()
+	if snap == nil || len(snap.ring) == 0 {
 		return ""
 	}
 
 	hash := hashKey(key)
-	idx := hr.search(hash)
-	return hr.ring[idx].nodeID
+	idx := searchRing(snap.ring, hash)
+	return snap.ring[idx].nodeID
+}
+
+// searchRing performs binary search on the ring snapshot.
+func searchRing(ring []ringEntry, target Hash) int {
+	idx := sort.Search(len(ring), func(i int) bool {
+		return ring[i].hash >= target
+	})
+	if idx >= len(ring) {
+		idx = 0
+	}
+	return idx
 }
 
 // GetNodes returns the primary and R-1 follower nodes for a key.
+// Uses lock-free snapshot read for the common case.
 func (hr *HashRing) GetNodes(key []byte, count int) []string {
-	hr.mu.RLock()
-	defer hr.mu.RUnlock()
-
-	if len(hr.ring) == 0 {
+	snap := hr.getSnapshot()
+	if snap == nil || len(snap.ring) == 0 {
 		return nil
 	}
 
 	hash := hashKey(key)
-	idx := hr.search(hash)
+	idx := searchRing(snap.ring, hash)
 
 	nodes := make([]string, 0, count)
-	seen := make(map[string]bool)
+	seen := make(map[string]bool, count)
 
-	for i := 0; i < len(hr.ring) && len(nodes) < count; i++ {
-		entry := hr.ring[(idx+i)%len(hr.ring)]
+	for i := 0; i < len(snap.ring) && len(nodes) < count; i++ {
+		entry := snap.ring[(idx+i)%len(snap.ring)]
 		if !seen[entry.nodeID] {
 			seen[entry.nodeID] = true
 			nodes = append(nodes, entry.nodeID)
@@ -165,7 +204,7 @@ func (hr *HashRing) search(target Hash) int {
 	return idx
 }
 
-// GetKeyHash returns the hash value for a key.
+// GetKeyHash returns the hash value for a key (no lock needed - pure function).
 func (hr *HashRing) GetKeyHash(key []byte) Hash {
 	return hashKey(key)
 }
