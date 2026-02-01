@@ -1,0 +1,414 @@
+# Distributed Key-Value Cache System
+
+**Design & Architecture Specification**
+
+**Version**: 1.0 
+**Date**: February 01, 2026
+**Authors**: [Bakhrom Umarov]
+
+This document defines a **production-ready distributed in-memory key-value cache** optimized for low latency, horizontal scalability, and predictable failure behavior. The system exposes a minimal API (GET/SET/DEL with TTL) and hides all distributed-system complexity from users.
+
+---
+
+## 1. Purpose & Goals
+
+### 1.1 System Goals
+
+* Horizontally scalable distributed cache
+* <1ms p99 latency (steady state)
+* Tolerates node and network failures
+* Simple client API with no topology or consistency knobs
+
+### 1.2 API
+
+```
+GET key
+SET key value [ttl]
+DEL key
+```
+
+### 1.3 Non-Goals
+
+* Strong consistency or linearizability
+* Transactions or cross-key atomicity
+* Global durability guarantees
+* Multi-region replication
+
+### 1.4 Target KPIs
+
+* ≥100k ops/sec/node
+* 99.99% availability
+* Failover: 5–30 seconds (lease-based)
+
+---
+
+## 2. Architecture Overview
+
+### 2.1 Node Model
+
+All nodes are identical peers and may simultaneously act as:
+
+* client ingress
+* shard primary or follower
+* replication sender/receiver
+* migration source/target
+
+There are **no dedicated coordinator nodes**.
+
+---
+
+### 2.2 Core Design Choices
+
+| Aspect        | Decision                                |
+| ------------- | --------------------------------------- |
+| Sharding      | Consistent hashing (64-bit)             |
+| Virtual nodes | 100–1000 per physical node              |
+| Replication   | Async primary → followers (R=3 default) |
+| Reads         | Served by followers or primary          |
+| Writes        | Primary only                            |
+| Consistency   | Eventual with session guarantees        |
+| Failover      | Per-shard majority lease election       |
+| Persistence   | Optional WAL (off / write / fsync)      |
+| Membership    | Gossip-based (SWIM-like)                |
+
+---
+
+## 3. Authority Model (Critical)
+
+To avoid ambiguity:
+
+* **Membership & liveness**: Eventually consistent (gossip)
+* **Shard leadership**: Strongly fenced via majority-acknowledged leases
+* **Writes**: Accepted only by ACTIVE primaries with a valid lease
+* **Reads**: Served by replicas, validated via version checks
+
+Gossip information is **advisory only** and never authoritative for writes.
+
+---
+
+## 4. Data Model
+
+### 4.1 Entry Format
+
+```
+key: bytes
+value: bytes
+expiry: unix_timestamp_ms (optional)
+version: (term, seq)
+```
+
+* Expiry is absolute time
+* Version is monotonic per shard
+
+---
+
+### 4.2 Operations
+
+* **Public**: GET, SET, DEL
+* **Internal**: CAS, GETMETA, REPLICATE, MIGRATE
+
+---
+
+## 5. Sharding
+
+* Key → hash → ring position
+* First node clockwise = **primary**
+* Next `R-1` distinct nodes = **followers**
+
+Skew is handled via virtual nodes and metrics-driven rebalancing.
+
+---
+
+## 6. Shards
+
+### 6.1 Definition
+
+A shard represents a contiguous hash range with:
+
+* primary
+* followers
+* term
+* state
+
+### 6.2 States & Write Rules
+
+| State         | Reads | Writes |
+| ------------- | ----- | ------ |
+| ACTIVE        | ✅     | ✅      |
+| MIGRATING_OUT | ✅     | ✅      |
+| MIGRATING_IN  | ✅     | ❌      |
+| DEGRADED      | ✅     | ❌      |
+| READ_ONLY     | ✅     | ❌      |
+
+Only one primary may accept writes for a shard at any time.
+
+---
+
+## 7. Request Routing
+
+### 7.1 Client Model
+
+Clients connect to any node. All routing is handled internally.
+
+---
+
+### 7.2 Write Path (SET / DEL)
+
+1. Client → ingress node
+2. Ingress computes shard ownership
+3. Request forwarded to shard primary
+4. Primary:
+
+   * appends WAL (if enabled)
+   * applies write to memory
+   * assigns `(term, seq)`
+   * asynchronously replicates to followers
+5. ACK returned to client
+
+Writes are idempotent and fenced by `(term, seq)`.
+
+---
+
+### 7.3 Read Path (GET)
+
+1. Ingress selects a replica (local preferred)
+2. Replica serves read
+3. On MISS or stale version → fallback to primary
+
+Session-level read-your-writes is enforced internally via read fencing.
+
+---
+
+## 8. Consistency Guarantees
+
+### Guaranteed
+
+* Read-your-writes (per connection / ingress)
+* Monotonic reads (best effort)
+* No split-brain writes
+
+### Not Guaranteed
+
+* Linearizability
+* Cross-key atomicity
+* Global ordering
+
+Strong reads may be enforced internally during degraded states but are **not user-facing**.
+
+---
+
+## 9. Replication
+
+* Asynchronous batched replication
+* Ordered per shard
+* Followers apply only newer versions
+* Repair mechanisms:
+
+  * fallback reads
+  * hinted handoff
+  * migration replay
+
+Optional anti-entropy (e.g., Merkle trees) is disabled by default.
+
+---
+
+## 10. Failure Handling
+
+### 10.1 Detection
+
+* Heartbeats every 1s
+* Failure suspected after ~5s
+
+---
+
+### 10.2 Primary Failure
+
+* Followers trigger per-shard election
+* Majority grants leadership
+* Term increments
+* New primary acquires lease
+* Old primary (if returns) demotes itself
+
+---
+
+### 10.3 Follower Failure
+
+* Primary continues serving
+* Replication resumes on recovery
+
+---
+
+### 10.4 Network Partitions
+
+* Majority side remains writable
+* Minority side becomes READ_ONLY
+* Prevents split-brain
+
+---
+
+## 11. Elections
+
+* Per-shard elections only
+* Majority vote among replicas
+* Lease-based leadership (10–30s)
+* Term fencing enforced on all writes
+* Deterministic tie-breaker (node_id)
+
+---
+
+## 12. Write-Ahead Log (WAL)
+
+### 12.1 Purpose
+
+Provides **node-local durability only**.
+
+---
+
+### 12.2 WAL Modes
+
+| Mode  | Behavior         |
+| ----- | ---------------- |
+| off   | no logging       |
+| write | OS page cache    |
+| fsync | durable on crash |
+
+---
+
+### 12.3 WAL Semantics
+
+* Logs only PUT and DEL
+* Never logs:
+
+  * GET
+  * evictions
+  * replication replays
+* WAL is discarded on leadership demotion
+
+---
+
+### 12.4 Replay
+
+* Replay only shards currently owned
+* Apply only matching terms
+* Expired entries dropped
+
+Snapshots are configurable (size- or time-based).
+
+---
+
+## 13. Rebalancing & Migration
+
+### Triggers
+
+* Node join
+* Node leave
+* Load imbalance
+
+### Flow
+
+1. Ring epoch increments
+2. Shards enter MIGRATING states
+3. Bulk data streamed
+4. Replication tail catch-up
+5. Final handoff
+6. New primary becomes ACTIVE
+
+Writes are never accepted by two nodes simultaneously.
+
+---
+
+## 14. Expiry & Eviction
+
+* TTL via lazy expiry + periodic sweeper (~60s)
+* Eviction via segmented LRU at ~90% memory
+* Evictions are local and never replicated
+
+---
+
+## 15. Versioning
+
+```
+version = (term, seq)
+```
+
+* Term changes on leadership
+* Seq increments per write
+* Conflict resolution: last-write-wins or CAS
+
+---
+
+## 16. Membership
+
+* Gossip-based membership (SWIM-like)
+* Bootstrap via static config or discovery
+* Join triggers migration
+* Crash handled via failure detection
+
+---
+
+## 17. Networking
+
+* Primary transport: TCP
+* Binary length-prefixed protocol
+* Timeouts, backpressure, request IDs
+* QUIC: experimental / future
+
+---
+
+## 18. Security
+
+* TLS/mTLS for node and client traffic
+* Client auth via shared secret or JWT
+* Optional rate limiting and audit logging
+
+---
+
+## 19. Observability
+
+### Metrics
+
+* QPS, latency (p50/p95/p99)
+* replication lag
+* eviction rate
+* shard state counts
+* WAL latency
+
+### Logs & Tracing
+
+* Structured JSON logs
+* Distributed tracing (OpenTelemetry)
+
+---
+
+## 20. Operations
+
+* Online horizontal and vertical scaling
+* Rolling restarts with warm recovery
+* Shard draining on shutdown
+* Configurable via file or env
+
+---
+
+## 21. Testing
+
+* Unit tests (routing, replication, WAL)
+* Fault injection / chaos testing
+* Network partition simulation
+* Benchmarking (YCSB)
+* Formal modeling of shard FSMs (optional)
+
+---
+
+## 22. Design Philosophy
+
+> **One writer per shard.
+> Version everything.
+> Fail predictably.
+> Hide complexity from users.**
+
+---
+
+### Final note
+
+This document describes the **intended steady-state architecture**, not an incremental prototype. Implementation may be staged, but semantics must remain consistent with this specification.
+
