@@ -10,6 +10,17 @@ import (
 	"github.com/baxromumarov/aegisKV/pkg/types"
 )
 
+// Fast test configuration for quick gossip convergence
+func testConfig(nodeID string, port int) Config {
+	return Config{
+		NodeID:         nodeID,
+		BindAddr:       fmt.Sprintf("127.0.0.1:%d", port),
+		PingInterval:   50 * time.Millisecond,  // Fast ping
+		SuspectTimeout: 150 * time.Millisecond, // Quick suspect detection
+		DeadTimeout:    300 * time.Millisecond, // Quick dead detection
+	}
+}
+
 // TestGossipNew tests Gossip creation.
 func TestGossipNew(t *testing.T) {
 	g, err := New(Config{
@@ -84,21 +95,15 @@ func TestGossipSingleNode(t *testing.T) {
 
 // TestGossipTwoNodes tests gossip between two nodes.
 func TestGossipTwoNodes(t *testing.T) {
-	// Node 1
-	g1, _ := New(Config{
-		NodeID:   "node-1",
-		BindAddr: "127.0.0.1:18001",
-	})
+	// Node 1 with fast config
+	g1, _ := New(testConfig("node-1", 18001))
 	if err := g1.Start(); err != nil {
 		t.Fatalf("failed to start node 1: %v", err)
 	}
 	defer g1.Stop()
 
-	// Node 2
-	g2, _ := New(Config{
-		NodeID:   "node-2",
-		BindAddr: "127.0.0.1:18002",
-	})
+	// Node 2 with fast config
+	g2, _ := New(testConfig("node-2", 18002))
 	if err := g2.Start(); err != nil {
 		t.Fatalf("failed to start node 2: %v", err)
 	}
@@ -109,8 +114,8 @@ func TestGossipTwoNodes(t *testing.T) {
 		t.Fatalf("failed to join: %v", err)
 	}
 
-	// Wait for membership to sync
-	time.Sleep(3 * time.Second)
+	// Wait for membership to sync (fast with test config)
+	time.Sleep(200 * time.Millisecond)
 
 	// Both should know about each other
 	m1 := g1.Members()
@@ -132,12 +137,9 @@ func TestGossipThreeNodes(t *testing.T) {
 	nodes := make([]*Gossip, 3)
 	ports := []int{18010, 18011, 18012}
 
-	// Start all nodes
+	// Start all nodes with fast config
 	for i := 0; i < 3; i++ {
-		g, _ := New(Config{
-			NodeID:   nodeID(i),
-			BindAddr: addr(ports[i]),
-		})
+		g, _ := New(testConfig(nodeID(i), ports[i]))
 		if err := g.Start(); err != nil {
 			t.Fatalf("failed to start node %d: %v", i, err)
 		}
@@ -156,8 +158,8 @@ func TestGossipThreeNodes(t *testing.T) {
 		nodes[i].Join(seeds)
 	}
 
-	// Wait for convergence
-	time.Sleep(5 * time.Second)
+	// Wait for convergence (fast with test config)
+	time.Sleep(300 * time.Millisecond)
 
 	// Check membership
 	for i, n := range nodes {
@@ -168,32 +170,26 @@ func TestGossipThreeNodes(t *testing.T) {
 
 // TestGossipLeave tests graceful leave.
 func TestGossipLeave(t *testing.T) {
-	// Node 1
-	g1, _ := New(Config{
-		NodeID:   "node-1",
-		BindAddr: "127.0.0.1:18020",
-	})
+	// Node 1 with fast config
+	g1, _ := New(testConfig("node-1", 18020))
 	g1.Start()
 	defer g1.Stop()
 
-	// Node 2
-	g2, _ := New(Config{
-		NodeID:   "node-2",
-		BindAddr: "127.0.0.1:18021",
-	})
+	// Node 2 with fast config
+	g2, _ := New(testConfig("node-2", 18021))
 	g2.Start()
 
 	// Join
 	g2.Join([]string{"127.0.0.1:18020"})
-	time.Sleep(2 * time.Second)
+	time.Sleep(150 * time.Millisecond)
 
 	// Leave
 	g2.Leave()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 	g2.Stop()
 
 	// Give node 1 time to process leave
-	time.Sleep(2 * time.Second)
+	time.Sleep(150 * time.Millisecond)
 
 	// Node 1 should no longer see node 2 as alive
 	alive := g1.AliveMembers()
@@ -272,39 +268,33 @@ func TestGossipMessageWithMembers(t *testing.T) {
 func TestGossipWithSecret(t *testing.T) {
 	secret := "my-cluster-secret"
 
-	// Node 1 with secret
-	g1, _ := New(Config{
-		NodeID:        "node-1",
-		BindAddr:      "127.0.0.1:18030",
-		ClusterSecret: secret,
-	})
+	// Node 1 with secret and fast config
+	cfg1 := testConfig("node-1", 18030)
+	cfg1.ClusterSecret = secret
+	g1, _ := New(cfg1)
 	g1.Start()
 	defer g1.Stop()
 
-	// Node 2 with same secret
-	g2, _ := New(Config{
-		NodeID:        "node-2",
-		BindAddr:      "127.0.0.1:18031",
-		ClusterSecret: secret,
-	})
+	// Node 2 with same secret and fast config
+	cfg2 := testConfig("node-2", 18031)
+	cfg2.ClusterSecret = secret
+	g2, _ := New(cfg2)
 	g2.Start()
 	defer g2.Stop()
 
 	// Should be able to join
 	g2.Join([]string{"127.0.0.1:18030"})
-	time.Sleep(2 * time.Second)
+	time.Sleep(150 * time.Millisecond)
 
 	// Node 3 with wrong secret
-	g3, _ := New(Config{
-		NodeID:        "node-3",
-		BindAddr:      "127.0.0.1:18032",
-		ClusterSecret: "wrong-secret",
-	})
+	cfg3 := testConfig("node-3", 18032)
+	cfg3.ClusterSecret = "wrong-secret"
+	g3, _ := New(cfg3)
 	g3.Start()
 	defer g3.Stop()
 
 	g3.Join([]string{"127.0.0.1:18030"})
-	time.Sleep(2 * time.Second)
+	time.Sleep(150 * time.Millisecond)
 
 	// Node 1 should not see node 3
 	members := g1.Members()
@@ -340,33 +330,28 @@ func TestGossipCallbacks(t *testing.T) {
 		leaveCalled bool
 	)
 
-	g1, _ := New(Config{
-		NodeID:   "node-1",
-		BindAddr: "127.0.0.1:18050",
-		OnNodeJoin: func(info types.NodeInfo) {
-			joinCalled = true
-			t.Logf("Join callback: %s", info.ID)
-		},
-		OnNodeLeave: func(info types.NodeInfo) {
-			leaveCalled = true
-			t.Logf("Leave callback: %s", info.ID)
-		},
-	})
+	cfg1 := testConfig("node-1", 18050)
+	cfg1.OnNodeJoin = func(info types.NodeInfo) {
+		joinCalled = true
+		t.Logf("Join callback: %s", info.ID)
+	}
+	cfg1.OnNodeLeave = func(info types.NodeInfo) {
+		leaveCalled = true
+		t.Logf("Leave callback: %s", info.ID)
+	}
+	g1, _ := New(cfg1)
 	g1.Start()
 	defer g1.Stop()
 
-	g2, _ := New(Config{
-		NodeID:   "node-2",
-		BindAddr: "127.0.0.1:18051",
-	})
+	g2, _ := New(testConfig("node-2", 18051))
 	g2.Start()
 
 	g2.Join([]string{"127.0.0.1:18050"})
-	time.Sleep(3 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	g2.Leave()
 	g2.Stop()
-	time.Sleep(2 * time.Second)
+	time.Sleep(150 * time.Millisecond)
 
 	if !joinCalled {
 		t.Log("Join callback was not called (timing dependent)")
