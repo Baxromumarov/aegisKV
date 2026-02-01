@@ -47,6 +47,8 @@ type Gossip struct {
 	mu             sync.RWMutex
 	nodeID         string
 	bindAddr       string
+	advertiseAddr  string
+	clientAddr     string // Client-facing address for redirects
 	members        map[string]*memberState
 	seqNum         uint64
 	incarnation    uint64
@@ -65,6 +67,8 @@ type Gossip struct {
 type Config struct {
 	NodeID         string
 	BindAddr       string
+	AdvertiseAddr  string // Address to advertise to other nodes (for containers/NAT)
+	ClientAddr     string // Client-facing address for redirects
 	Seeds          []string
 	PingInterval   time.Duration
 	SuspectTimeout time.Duration
@@ -86,9 +90,23 @@ func New(cfg Config) (*Gossip, error) {
 		cfg.DeadTimeout = 10 * time.Second
 	}
 
+	// Use advertise address if specified, otherwise use bind address
+	advertiseAddr := cfg.AdvertiseAddr
+	if advertiseAddr == "" {
+		advertiseAddr = cfg.BindAddr
+	}
+
+	// Use client address if specified
+	clientAddr := cfg.ClientAddr
+	if clientAddr == "" {
+		clientAddr = advertiseAddr // Fall back to gossip address if not specified
+	}
+
 	g := &Gossip{
 		nodeID:         cfg.NodeID,
 		bindAddr:       cfg.BindAddr,
+		advertiseAddr:  advertiseAddr,
+		clientAddr:     clientAddr,
 		members:        make(map[string]*memberState),
 		pingInterval:   cfg.PingInterval,
 		suspectTimeout: cfg.SuspectTimeout,
@@ -115,6 +133,20 @@ func (g *Gossip) Start() error {
 	}
 	g.conn = conn
 
+	// Add self to member list
+	g.mu.Lock()
+	g.members[g.nodeID] = &memberState{
+		info: types.NodeInfo{
+			ID:         g.nodeID,
+			Addr:       g.advertiseAddr,
+			ClientAddr: g.clientAddr,
+			State:      types.NodeStateAlive,
+			LastSeen:   time.Now(),
+		},
+		lastSeen: time.Now(),
+	}
+	g.mu.Unlock()
+
 	g.wg.Add(2)
 	go g.receiveLoop()
 	go g.protocolLoop()
@@ -135,10 +167,11 @@ func (g *Gossip) Stop() error {
 // Join joins the cluster using seed nodes.
 func (g *Gossip) Join(seeds []string) error {
 	selfInfo := types.NodeInfo{
-		ID:       g.nodeID,
-		Addr:     g.bindAddr,
-		State:    types.NodeStateAlive,
-		LastSeen: time.Now(),
+		ID:         g.nodeID,
+		Addr:       g.advertiseAddr,
+		ClientAddr: g.clientAddr,
+		State:      types.NodeStateAlive,
+		LastSeen:   time.Now(),
 	}
 
 	msg := &Message{
@@ -149,7 +182,7 @@ func (g *Gossip) Join(seeds []string) error {
 	}
 
 	for _, seed := range seeds {
-		if seed == g.bindAddr {
+		if seed == g.bindAddr || seed == g.advertiseAddr {
 			continue
 		}
 		if err := g.sendTo(seed, msg); err != nil {
@@ -255,6 +288,15 @@ func (g *Gossip) handlePing(msg *Message, from *net.UDPAddr) {
 	g.mu.Lock()
 	g.seqNum++
 	seqNum := g.seqNum
+	// Get the sender's stored address if known
+	var replyAddr string
+	if m, ok := g.members[msg.FromNodeID]; ok {
+		replyAddr = m.info.Addr
+		m.lastSeen = time.Now()
+		m.info.State = types.NodeStateAlive
+	} else {
+		replyAddr = from.String()
+	}
 	g.mu.Unlock()
 
 	ack := &Message{
@@ -266,7 +308,7 @@ func (g *Gossip) handlePing(msg *Message, from *net.UDPAddr) {
 	}
 
 	_ = seqNum
-	g.sendTo(from.String(), ack)
+	g.sendTo(replyAddr, ack)
 }
 
 // handleAck handles ACK messages.
@@ -329,7 +371,8 @@ func (g *Gossip) handleJoin(msg *Message, from *net.UDPAddr) {
 			Members:    g.Members(),
 			Timestamp:  time.Now().UnixNano(),
 		}
-		g.sendTo(from.String(), sync)
+		// Send sync to the node's advertised address
+		g.sendTo(msg.NodeInfo.Addr, sync)
 	}
 }
 
@@ -398,7 +441,8 @@ func (g *Gossip) pingRandomMember() {
 
 	targets := make([]types.NodeInfo, 0)
 	for _, m := range members {
-		if m.ID != g.nodeID && m.State == types.NodeStateAlive {
+		// Ping alive and suspected nodes (suspected nodes might recover)
+		if m.ID != g.nodeID && (m.State == types.NodeStateAlive || m.State == types.NodeStateSuspect) {
 			targets = append(targets, m)
 		}
 	}

@@ -32,15 +32,17 @@ type Config struct {
 	WALMaxSizeMB int64  `json:"wal_max_size_mb"`
 
 	// Gossip configuration
-	GossipBindAddr string        `json:"gossip_bind_addr"`
-	GossipInterval time.Duration `json:"gossip_interval"`
-	SuspectTimeout time.Duration `json:"suspect_timeout"`
-	DeadTimeout    time.Duration `json:"dead_timeout"`
+	GossipBindAddr      string        `json:"gossip_bind_addr"`
+	GossipAdvertiseAddr string        `json:"gossip_advertise_addr"` // For containers/NAT
+	GossipInterval      time.Duration `json:"gossip_interval"`
+	SuspectTimeout      time.Duration `json:"suspect_timeout"`
+	DeadTimeout         time.Duration `json:"dead_timeout"`
 
 	// Server configuration
-	ReadTimeout  time.Duration `json:"read_timeout"`
-	WriteTimeout time.Duration `json:"write_timeout"`
-	MaxConns     int           `json:"max_conns"`
+	ClientAdvertiseAddr string        `json:"client_advertise_addr"` // Client-facing address for redirects
+	ReadTimeout         time.Duration `json:"read_timeout"`
+	WriteTimeout        time.Duration `json:"write_timeout"`
+	MaxConns            int           `json:"max_conns"`
 
 	// Replication configuration
 	ReplicationBatchSize    int           `json:"replication_batch_size"`

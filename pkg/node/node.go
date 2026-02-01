@@ -74,6 +74,8 @@ func New(cfg *config.Config) (*Node, error) {
 	gossiper, err := gossip.New(gossip.Config{
 		NodeID:         cfg.NodeID,
 		BindAddr:       cfg.GossipBindAddr,
+		AdvertiseAddr:  cfg.GossipAdvertiseAddr,
+		ClientAddr:     cfg.ClientAdvertiseAddr,
 		PingInterval:   cfg.GossipInterval,
 		SuspectTimeout: cfg.SuspectTimeout,
 		DeadTimeout:    cfg.DeadTimeout,
@@ -242,7 +244,7 @@ func (n *Node) HandleReplicate(req *protocol.Request) error {
 // GetRedirectAddr returns the address to redirect a request to.
 func (n *Node) GetRedirectAddr(key []byte) string {
 	primary := n.shardMgr.GetPrimaryForKey(key)
-	return n.getNodeAddr(primary)
+	return n.getClientAddr(primary)
 }
 
 // IsPrimaryFor returns true if this node is the primary for the given key.
@@ -250,7 +252,7 @@ func (n *Node) IsPrimaryFor(key []byte) bool {
 	return n.shardMgr.IsPrimaryFor(key)
 }
 
-// getNodeAddr returns the address for a node ID.
+// getNodeAddr returns the gossip address for a node ID.
 func (n *Node) getNodeAddr(nodeID string) string {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -260,6 +262,30 @@ func (n *Node) getNodeAddr(nodeID string) string {
 	}
 
 	if nodeID == n.nodeID {
+		return n.cfg.BindAddr
+	}
+
+	return n.ring.GetNodeAddr(nodeID)
+}
+
+// getClientAddr returns the client-facing address for a node ID (for redirects).
+func (n *Node) getClientAddr(nodeID string) string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	if info, ok := n.members[nodeID]; ok {
+		// Prefer ClientAddr if set, otherwise fall back to Addr
+		if info.ClientAddr != "" {
+			return info.ClientAddr
+		}
+		return info.Addr
+	}
+
+	// If this is our own node
+	if nodeID == n.nodeID {
+		if n.cfg.ClientAdvertiseAddr != "" {
+			return n.cfg.ClientAdvertiseAddr
+		}
 		return n.cfg.BindAddr
 	}
 

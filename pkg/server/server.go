@@ -224,6 +224,14 @@ func (s *Server) handleGet(req *protocol.Request) *protocol.Response {
 		Key:       req.Key,
 	}
 
+	// Check if we should redirect (we're not the primary)
+	if !s.handler.IsPrimaryFor(req.Key) {
+		addr := s.handler.GetRedirectAddr(req.Key)
+		resp.Status = protocol.StatusRedirect
+		resp.NodeAddr = addr
+		return resp
+	}
+
 	value, ttl, version, found := s.handler.HandleGet(req.Key)
 	if !found {
 		resp.Status = protocol.StatusNotFound

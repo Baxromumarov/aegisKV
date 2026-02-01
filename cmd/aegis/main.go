@@ -15,16 +15,18 @@ import (
 
 func main() {
 	var (
-		configFile  = flag.String("config", "", "Path to config file")
-		nodeID      = flag.String("node-id", "", "Node ID (default: hostname)")
-		bindAddr    = flag.String("bind", "0.0.0.0:7700", "Address to bind to")
-		gossipAddr  = flag.String("gossip", "0.0.0.0:7701", "Address for gossip protocol")
-		dataDir     = flag.String("data-dir", "./data", "Data directory")
-		seeds       = flag.String("seeds", "", "Comma-separated list of seed nodes")
-		replFactor  = flag.Int("replication-factor", 3, "Replication factor")
-		numShards   = flag.Int("shards", 256, "Number of shards")
-		walMode     = flag.String("wal", "off", "WAL mode: off, write, fsync")
-		maxMemoryMB = flag.Int64("max-memory", 1024, "Maximum memory in MB")
+		configFile      = flag.String("config", "", "Path to config file")
+		nodeID          = flag.String("node-id", "", "Node ID (default: hostname)")
+		bindAddr        = flag.String("bind", "0.0.0.0:7700", "Address to bind to")
+		gossipAddr      = flag.String("gossip", "0.0.0.0:7701", "Address for gossip protocol")
+		gossipAdvertise = flag.String("gossip-advertise", "", "Address to advertise for gossip (for containers/NAT)")
+		clientAdvertise = flag.String("client-advertise", "", "Address to advertise for client redirects (for containers/NAT)")
+		dataDir         = flag.String("data-dir", "./data", "Data directory")
+		seeds           = flag.String("seeds", "", "Comma-separated list of seed nodes")
+		replFactor      = flag.Int("replication-factor", 3, "Replication factor")
+		numShards       = flag.Int("shards", 256, "Number of shards")
+		walMode         = flag.String("wal", "off", "WAL mode: off, write, fsync")
+		maxMemoryMB     = flag.Int64("max-memory", 1024, "Maximum memory in MB")
 	)
 
 	flag.Parse()
@@ -49,6 +51,12 @@ func main() {
 	}
 	if *gossipAddr != "" {
 		cfg.GossipBindAddr = *gossipAddr
+	}
+	if *gossipAdvertise != "" {
+		cfg.GossipAdvertiseAddr = *gossipAdvertise
+	}
+	if *clientAdvertise != "" {
+		cfg.ClientAdvertiseAddr = *clientAdvertise
 	}
 	if *dataDir != "" {
 		cfg.DataDir = *dataDir
@@ -85,6 +93,9 @@ func main() {
 	fmt.Printf("AegisKV node %s started\n", n.NodeID())
 	fmt.Printf("  Bind address: %s\n", cfg.BindAddr)
 	fmt.Printf("  Gossip address: %s\n", cfg.GossipBindAddr)
+	if cfg.GossipAdvertiseAddr != "" {
+		fmt.Printf("  Gossip advertise: %s\n", cfg.GossipAdvertiseAddr)
+	}
 	fmt.Printf("  Data directory: %s\n", cfg.DataDir)
 	fmt.Printf("  Shards: %d\n", cfg.NumShards)
 	fmt.Printf("  Replication factor: %d\n", cfg.ReplicationFactor)

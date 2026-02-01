@@ -1,0 +1,208 @@
+version: "3.8"
+
+services:
+    # Node 1 - Seed node
+    aegis-node1:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: aegis-node1
+        hostname: aegis-node1
+        command: >
+            --node-id=node-1
+            --bind=0.0.0.0:7700
+            --gossip=0.0.0.0:7701
+            --gossip-advertise=aegis-node1:7701
+            --client-advertise=aegis-node1:7700
+            --data-dir=/data
+            --shards=64
+            --replication-factor=3
+            --wal=off
+        ports:
+            - "7700:7700"
+            - "7701:7701"
+        volumes:
+            - aegis-data-1:/data
+        networks:
+            - aegis-network
+        healthcheck:
+            test: ["CMD", "nc", "-z", "localhost", "7700"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+    # Node 2
+    aegis-node2:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: aegis-node2
+        hostname: aegis-node2
+        command: >
+            --node-id=node-2
+            --bind=0.0.0.0:7700
+            --gossip=0.0.0.0:7701
+            --gossip-advertise=aegis-node2:7701
+            --client-advertise=aegis-node2:7700
+            --seeds=aegis-node1:7701
+            --data-dir=/data
+            --shards=64
+            --replication-factor=3
+            --wal=off
+        ports:
+            - "7710:7700"
+            - "7711:7701"
+        volumes:
+            - aegis-data-2:/data
+        networks:
+            - aegis-network
+        depends_on:
+            aegis-node1:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "nc", "-z", "localhost", "7700"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+    # Node 3
+    aegis-node3:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: aegis-node3
+        hostname: aegis-node3
+        command: >
+            --node-id=node-3
+            --bind=0.0.0.0:7700
+            --gossip=0.0.0.0:7701
+            --gossip-advertise=aegis-node3:7701
+            --client-advertise=aegis-node3:7700
+            --seeds=aegis-node1:7701
+            --data-dir=/data
+            --shards=64
+            --replication-factor=3
+            --wal=off
+        ports:
+            - "7720:7700"
+            - "7721:7701"
+        volumes:
+            - aegis-data-3:/data
+        networks:
+            - aegis-network
+        depends_on:
+            aegis-node1:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "nc", "-z", "localhost", "7700"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+    # Node 4
+    aegis-node4:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: aegis-node4
+        hostname: aegis-node4
+        command: >
+            --node-id=node-4
+            --bind=0.0.0.0:7700
+            --gossip=0.0.0.0:7701
+            --gossip-advertise=aegis-node4:7701
+            --client-advertise=aegis-node4:7700
+            --seeds=aegis-node1:7701
+            --data-dir=/data
+            --shards=64
+            --replication-factor=3
+            --wal=off
+        ports:
+            - "7730:7700"
+            - "7731:7701"
+        volumes:
+            - aegis-data-4:/data
+        networks:
+            - aegis-network
+        depends_on:
+            aegis-node1:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "nc", "-z", "localhost", "7700"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+    # Node 5
+    aegis-node5:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: aegis-node5
+        hostname: aegis-node5
+        command: >
+            --node-id=node-5
+            --bind=0.0.0.0:7700
+            --gossip=0.0.0.0:7701
+            --gossip-advertise=aegis-node5:7701
+            --client-advertise=aegis-node5:7700
+            --seeds=aegis-node1:7701
+            --data-dir=/data
+            --shards=64
+            --replication-factor=3
+            --wal=off
+        ports:
+            - "7740:7700"
+            - "7741:7701"
+        volumes:
+            - aegis-data-5:/data
+        networks:
+            - aegis-network
+        depends_on:
+            aegis-node1:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "nc", "-z", "localhost", "7700"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+    # Test runner service - runs tests inside the Docker network
+    aegis-test:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: aegis-test
+        hostname: aegis-test
+        entrypoint: ["/app/aegis-test"]
+        command: >
+            --seeds=aegis-node1:7700,aegis-node2:7700,aegis-node3:7700,aegis-node4:7700,aegis-node5:7700
+            --test=all
+            --ops=1000
+            --workers=10
+        networks:
+            - aegis-network
+        depends_on:
+            aegis-node1:
+                condition: service_healthy
+            aegis-node2:
+                condition: service_healthy
+            aegis-node3:
+                condition: service_healthy
+            aegis-node4:
+                condition: service_healthy
+            aegis-node5:
+                condition: service_healthy
+        profiles:
+            - test
+
+networks:
+    aegis-network:
+        driver: bridge
+
+volumes:
+    aegis-data-1:
+    aegis-data-2:
+    aegis-data-3:
+    aegis-data-4:
+    aegis-data-5:

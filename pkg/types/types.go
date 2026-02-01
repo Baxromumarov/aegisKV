@@ -129,12 +129,13 @@ func (s NodeState) String() string {
 
 // NodeInfo represents information about a cluster node.
 type NodeInfo struct {
-	ID        string    `json:"id"`
-	Addr      string    `json:"addr"`
-	IntraAddr string    `json:"intraAddr"`
-	State     NodeState `json:"state"`
-	LastSeen  time.Time `json:"lastSeen"`
-	Meta      NodeMeta  `json:"meta"`
+	ID         string    `json:"id"`
+	Addr       string    `json:"addr"`       // Gossip address
+	ClientAddr string    `json:"clientAddr"` // Client-facing address for redirects
+	IntraAddr  string    `json:"intraAddr"`
+	State      NodeState `json:"state"`
+	LastSeen   time.Time `json:"lastSeen"`
+	Meta       NodeMeta  `json:"meta"`
 }
 
 // NodeMeta contains metadata about a node.
