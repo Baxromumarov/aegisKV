@@ -21,7 +21,14 @@ type RepairRequest struct {
 }
 
 // ReplicateFunc is the function to call for replicating repairs.
-type ReplicateFunc func(shardID uint64, key, value []byte, ttl time.Duration, version types.Version, targets []string) error
+type ReplicateFunc func(
+	shardID uint64,
+	key []byte,
+	value []byte,
+	ttl time.Duration,
+	version types.Version,
+	targets []string,
+) error
 
 // Repairer handles background read repairs.
 type Repairer struct {

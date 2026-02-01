@@ -58,9 +58,9 @@ func (tc *TestCluster) createNodeConfig(index int) *config.Config {
 		EvictionRatio:     0.9,
 		ShardMaxBytes:     16 * 1024 * 1024,
 		WALMode:           "off",
-		GossipInterval:    500 * time.Millisecond,
-		SuspectTimeout:    2 * time.Second,
-		DeadTimeout:       5 * time.Second,
+		GossipInterval:    50 * time.Millisecond,  // Fast for testing
+		SuspectTimeout:    200 * time.Millisecond, // Fast for testing
+		DeadTimeout:       500 * time.Millisecond, // Fast for testing
 		ReadTimeout:       5 * time.Second,
 		WriteTimeout:      5 * time.Second,
 		MaxConns:          1000,
@@ -169,7 +169,7 @@ func TestClusterFormation(t *testing.T) {
 	defer cluster.Stop()
 
 	// Give gossip more time to fully propagate
-	time.Sleep(5 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	// Check that at least the seed node (node 0) sees most members
 	node0 := cluster.GetNode(0)
@@ -210,7 +210,7 @@ func TestBasicOperations(t *testing.T) {
 	cluster.Start(t)
 	defer cluster.Stop()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 	key := []byte("test-key")
@@ -257,7 +257,7 @@ func TestDataDistribution(t *testing.T) {
 	cluster.Start(t)
 	defer cluster.Stop()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 
@@ -299,7 +299,7 @@ func TestTTLExpiration(t *testing.T) {
 	cluster.Start(t)
 	defer cluster.Stop()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 	key := []byte("ttl-test-key")
@@ -333,7 +333,7 @@ func TestConcurrentOperations(t *testing.T) {
 	cluster.Start(t)
 	defer cluster.Stop()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 
@@ -381,7 +381,7 @@ func TestNodeFailure(t *testing.T) {
 	cluster.Start(t)
 	defer cluster.Stop()
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(300 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 	for i := 0; i < 100; i++ {
@@ -396,7 +396,7 @@ func TestNodeFailure(t *testing.T) {
 		t.Fatalf("Failed to stop node: %v", err)
 	}
 
-	time.Sleep(6 * time.Second)
+	time.Sleep(600 * time.Millisecond)
 
 	for i := 0; i < 5; i++ {
 		n := cluster.GetNode(i)
@@ -427,21 +427,21 @@ func TestNodeRestart(t *testing.T) {
 	cluster.Start(t)
 	defer cluster.Stop()
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(300 * time.Millisecond)
 
 	t.Log("Stopping node 3...")
 	if err := cluster.StopNode(3); err != nil {
 		t.Fatalf("Failed to stop node: %v", err)
 	}
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	t.Log("Restarting node 3...")
 	if err := cluster.RestartNode(t, 3); err != nil {
 		t.Fatalf("Failed to restart node: %v", err)
 	}
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(300 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 	members := node0.Members()
@@ -454,7 +454,7 @@ func BenchmarkClusterSet(b *testing.B) {
 	cluster.Start(&testing.T{})
 	defer cluster.Stop()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 	value := make([]byte, 100)
@@ -472,7 +472,7 @@ func BenchmarkClusterGet(b *testing.B) {
 	cluster.Start(&testing.T{})
 	defer cluster.Stop()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 	value := make([]byte, 100)
@@ -495,7 +495,7 @@ func BenchmarkClusterMixedWorkload(b *testing.B) {
 	cluster.Start(&testing.T{})
 	defer cluster.Stop()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 	value := make([]byte, 100)
@@ -528,7 +528,7 @@ func TestLargeCluster(t *testing.T) {
 	defer cluster.Stop()
 
 	// Wait for gossip to propagate in larger cluster
-	time.Sleep(8 * time.Second)
+	time.Sleep(800 * time.Millisecond)
 
 	// Check cluster membership
 	node0 := cluster.GetNode(0)
@@ -569,7 +569,7 @@ func TestLargeCluster(t *testing.T) {
 	cluster.StopNode(5)
 	cluster.StopNode(8)
 
-	time.Sleep(6 * time.Second)
+	time.Sleep(600 * time.Millisecond)
 
 	// Verify remaining nodes still work
 	stillReadable := 0
@@ -593,7 +593,7 @@ func TestConsistencyCheck(t *testing.T) {
 	cluster.Start(t)
 	defer cluster.Stop()
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(300 * time.Millisecond)
 
 	// Write data and verify version increments
 	node0 := cluster.GetNode(0)
@@ -640,7 +640,7 @@ func TestHighThroughput(t *testing.T) {
 	cluster.Start(t)
 	defer cluster.Stop()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 
@@ -694,7 +694,7 @@ func BenchmarkCluster10Nodes(b *testing.B) {
 	cluster.Start(&testing.T{})
 	defer cluster.Stop()
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	node0 := cluster.GetNode(0)
 	value := make([]byte, 100)

@@ -1,3 +1,6 @@
+//go:build loadtest
+// +build loadtest
+
 // Package loadtest provides production readiness tests for AegisKV.
 package loadtest
 

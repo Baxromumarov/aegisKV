@@ -389,8 +389,8 @@ func (n *Node) Kill() error {
 		return fmt.Errorf("timeout waiting for node %s to exit after kill", n.ID)
 	}
 
-	// Wait a bit for OS to clean up file descriptors and sockets
-	time.Sleep(100 * time.Millisecond)
+	// Wait longer for OS to clean up file descriptors and sockets
+	time.Sleep(500 * time.Millisecond)
 
 	return nil
 }
@@ -407,36 +407,32 @@ func (n *Node) Restart() error {
 		n.mu.Unlock()
 	}
 
-	// Wait for OS to release ports - check both client and gossip ports are free
-	deadline := time.Now().Add(5 * time.Second)
+	// Wait for OS to release ports - try to actually bind to check availability
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		clientFree := true
-		gossipFree := true
-
-		// Check client port
-		conn, err := net.DialTimeout("tcp", n.ClientAddr, 50*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			clientFree = false
-		}
-
-		// Check gossip port
-		conn, err = net.DialTimeout("tcp", n.GossipAddr, 50*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			gossipFree = false
-		}
+		clientFree := isPortAvailable(n.ClientAddr)
+		gossipFree := isPortAvailable(n.GossipAddr)
 
 		if clientFree && gossipFree {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	// Additional safety delay for OS cleanup
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	return n.Start()
+}
+
+// isPortAvailable checks if a port is available by attempting to bind to it.
+func isPortAvailable(addr string) bool {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
 }
 
 // IsRunning returns whether the node is running.

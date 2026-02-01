@@ -1,3 +1,10 @@
+//go:build chaos
+// +build chaos
+
+// Package integration provides chaos and stress tests for AegisKV.
+// These tests are long-running and require the 'chaos' build tag:
+//   go test ./tests/integration/... -tags chaos
+
 package integration
 
 import (
@@ -1368,7 +1375,7 @@ func TestLoadSustainedThroughput(t *testing.T) {
 	// Calculate min/max throughput from samples
 	sampleMu.Lock()
 	if len(samples) > 0 {
-		minRate := float64(1<<62)
+		minRate := float64(1 << 62)
 		maxRate := float64(0)
 		for _, s := range samples {
 			rate := float64(s.ops) / s.elapsed.Seconds()
@@ -2006,11 +2013,11 @@ type chaosContext struct {
 }
 
 type chaosStats struct {
-	setSuccess, setFail       int64
-	getSuccess, getFail       int64
-	getMiss                   int64
-	delSuccess, delFail       int64
-	kills, restarts           int64
+	setSuccess, setFail int64
+	getSuccess, getFail int64
+	getMiss             int64
+	delSuccess, delFail int64
+	kills, restarts     int64
 }
 
 func (c *chaosContext) stats() chaosStats {

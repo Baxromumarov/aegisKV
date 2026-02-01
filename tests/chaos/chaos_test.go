@@ -1,3 +1,10 @@
+//go:build chaos
+// +build chaos
+
+// Package chaos provides chaos testing for AegisKV.
+// These tests run processes and inject faults. Use -tags chaos to run:
+//   go test ./tests/chaos/... -tags chaos -timeout 5m
+
 package chaos
 
 import (

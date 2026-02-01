@@ -1,3 +1,6 @@
+//go:build loadtest
+// +build loadtest
+
 // Package robustness provides comprehensive tests for WAL recovery, invariant assertions,
 // and chaos under load to verify system correctness under failure conditions.
 package robustness

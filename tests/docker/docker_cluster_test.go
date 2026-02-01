@@ -1,3 +1,11 @@
+//go:build docker
+// +build docker
+
+// Package docker_test provides tests against a Docker-based cluster.
+// These tests require a running Docker Compose cluster:
+//   docker compose up -d
+//   go test ./tests/docker/... -tags docker
+
 package docker_test
 
 import (
