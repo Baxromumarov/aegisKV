@@ -1,4 +1,4 @@
-.PHONY: build test test-cover test-unit test-integration test-process test-chaos test-robustness bench bench-cluster clean run docker-build docker-up docker-down docker-test docker-logs
+.PHONY: build test test-cover test-unit test-integration test-process test-chaos test-robustness bench bench-cluster bench-load bench-compare bench-scalability clean run docker-build docker-up docker-down docker-test docker-logs
 
 # Build variables
 BINARY_NAME=aegis
@@ -111,6 +111,57 @@ bench:
 bench-cluster:
 	@echo "Running cluster benchmarks..."
 	$(GOTEST) -bench=. -benchmem -timeout 300s ./tests/integration/...
+
+# Load testing targets
+bench-load: build
+	@echo "Running load test (single node)..."
+	$(GOTEST) -v -timeout 600s ./tests/loadtest/... -run TestAegisLoadSingle
+
+bench-load-cluster: build
+	@echo "Running load test (3-node cluster)..."
+	$(GOTEST) -v -timeout 600s ./tests/loadtest/... -run TestAegisLoadCluster
+
+bench-compare: build
+	@echo "Running AegisKV vs Redis comparison (requires Redis at localhost:6379)..."
+	$(GOTEST) -v -timeout 900s ./tests/loadtest/... -run TestCompareAegisRedis
+
+bench-scalability: build
+	@echo "Running scalability test (varying concurrency)..."
+	$(GOTEST) -v -timeout 600s ./tests/loadtest/... -run TestAegisScalability
+
+bench-value-sizes: build
+	@echo "Running value size impact test..."
+	$(GOTEST) -v -timeout 600s ./tests/loadtest/... -run TestValueSizeImpact
+
+bench-rw-ratio: build
+	@echo "Running read/write ratio impact test..."
+	$(GOTEST) -v -timeout 600s ./tests/loadtest/... -run TestReadWriteRatioImpact
+
+bench-high-concurrency: build
+	@echo "Running high concurrency test (1000 workers)..."
+	$(GOTEST) -v -timeout 900s ./tests/loadtest/... -run TestHighConcurrency
+
+bench-long-running: build
+	@echo "Running long-running stability test (5 min default, set LOAD_TEST_DURATION for custom)..."
+	$(GOTEST) -v -timeout 3600s ./tests/loadtest/... -run TestLongRunning
+
+bench-failover: build
+	@echo "Running failover test..."
+	$(GOTEST) -v -timeout 300s ./tests/loadtest/... -run TestMultiNodeFailover
+
+bench-all: build
+	@echo "Running all load tests..."
+	$(GOTEST) -v -timeout 1800s ./tests/loadtest/...
+
+# Run benchmark report script
+bench-report: build
+	@echo "Running comprehensive benchmark suite..."
+	./tests/loadtest/run_benchmarks.sh
+
+# Go benchmarks (micro-benchmarks)
+bench-go: build
+	@echo "Running Go benchmarks..."
+	$(GOTEST) -bench=. -benchmem -timeout 600s ./tests/loadtest/...
 
 # Clean build artifacts
 clean:
@@ -264,6 +315,19 @@ help:
 	@echo "  make test-chaos-medium Run chaos test (5 minutes)"
 	@echo "  make test-chaos-long  Run chaos test (15 minutes)"
 	@echo "  make test-chaos-extended Run chaos test (30 minutes)"
+	@echo ""
+	@echo "Load Testing:"
+	@echo "  make bench-load       Run load test (single node)"
+	@echo "  make bench-load-cluster Run load test (3-node cluster)"
+	@echo "  make bench-compare    Compare AegisKV vs Redis"
+	@echo "  make bench-scalability Run scalability test (varying concurrency)"
+	@echo "  make bench-value-sizes Test impact of different value sizes"
+	@echo "  make bench-rw-ratio   Test impact of read/write ratios"
+	@echo "  make bench-high-concurrency High concurrency test (1000 workers)"
+	@echo "  make bench-long-running Long-running stability test (5+ min)"
+	@echo "  make bench-failover   Test behavior during node failure"
+	@echo "  make bench-all        Run all load tests"
+	@echo "  make bench-go         Run Go micro-benchmarks"
 	@echo ""
 	@echo "Other:"
 	@echo "  make test-cover       Run tests with coverage report"
