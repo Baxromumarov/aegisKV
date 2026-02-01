@@ -45,6 +45,7 @@ type Server struct {
 	rateLimit    float64
 	rateBurst    int
 	workSem      chan struct{} // Bounded semaphore for backpressure
+	draining     int32         // Atomic flag: 1 = draining, no new requests
 }
 
 // Config holds server configuration.
@@ -121,22 +122,34 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Stop stops the server.
+// Stop stops the server with graceful connection draining.
 func (s *Server) Stop() error {
-	close(s.stopCh)
+	// Set draining flag - existing connections can finish current request
+	atomic.StoreInt32(&s.draining, 1)
 
+	// Stop accepting new connections
+	close(s.stopCh)
 	if s.listener != nil {
 		s.listener.Close()
 	}
 
+	// Wait for all connection handlers to finish
+	// (they will exit after completing current request due to draining flag)
+	s.wg.Wait()
+
+	// Force close any remaining connections
 	s.connMu.Lock()
 	for conn := range s.connections {
 		conn.Close()
 	}
 	s.connMu.Unlock()
 
-	s.wg.Wait()
 	return nil
+}
+
+// IsDraining returns true if the server is draining connections.
+func (s *Server) IsDraining() bool {
+	return atomic.LoadInt32(&s.draining) == 1
 }
 
 // acceptLoop accepts new connections.
@@ -206,6 +219,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 	authenticated := s.authToken == "" // No auth required if token empty
 
 	for {
+		// Check if draining - complete current request then exit
+		if s.IsDraining() {
+			return
+		}
+
 		select {
 		case <-s.stopCh:
 			return

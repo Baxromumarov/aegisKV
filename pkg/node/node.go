@@ -545,9 +545,9 @@ func (n *Node) Members() []types.NodeInfo {
 }
 
 // statsFunc returns node stats for the health server.
-func (n *Node) statsFunc() map[string]interface{} {
+func (n *Node) statsFunc() map[string]any {
 	stats := n.Stats()
-	return map[string]interface{}{
+	return map[string]any{
 		"active_conns":     stats.ActiveConns,
 		"total_requests":   stats.TotalRequests,
 		"total_shards":     stats.TotalShards,

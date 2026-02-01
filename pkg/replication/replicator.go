@@ -11,7 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/baxromumarov/aegisKV/pkg/circuitbreaker"
 	"github.com/baxromumarov/aegisKV/pkg/logger"
+	"github.com/baxromumarov/aegisKV/pkg/metrics"
 	"github.com/baxromumarov/aegisKV/pkg/protocol"
 	"github.com/baxromumarov/aegisKV/pkg/types"
 )
@@ -61,6 +63,14 @@ type Replicator struct {
 	tlsConfig     *tls.Config
 	droppedEvents uint64
 	log           *logger.Logger
+
+	// Circuit breaker
+	cbManager    *circuitbreaker.Manager
+	retryBackoff map[string]int // target -> consecutive failures for backoff
+	backoffMu    sync.Mutex
+
+	// Metrics
+	metrics *metrics.Metrics
 }
 
 // Config holds replicator configuration.
@@ -98,6 +108,14 @@ func New(cfg Config) *Replicator {
 		authToken:    cfg.AuthToken,
 		tlsConfig:    cfg.TLSConfig,
 		log:          logger.New("replicator", logger.LevelInfo, nil),
+		cbManager: circuitbreaker.NewManager(circuitbreaker.Config{
+			MaxFailures:      5,
+			ResetTimeout:     30 * time.Second,
+			HalfOpenMax:      3,
+			SuccessThreshold: 2,
+		}),
+		retryBackoff: make(map[string]int),
+		metrics:      metrics.Global(),
 	}
 }
 
@@ -182,6 +200,7 @@ func (r *Replicator) ReplicateDelete(shardID uint64, key []byte, version types.V
 func (r *Replicator) senderLoop(target string, queue chan *ReplicationEvent) {
 	defer r.wg.Done()
 
+	cb := r.cbManager.Get(target)
 	batch := make([]*ReplicationEvent, 0, r.batchSize)
 	timer := time.NewTimer(r.batchTimeout)
 	defer timer.Stop()
@@ -190,15 +209,17 @@ func (r *Replicator) senderLoop(target string, queue chan *ReplicationEvent) {
 		select {
 		case <-r.stopCh:
 			if len(batch) > 0 {
-				r.sendBatch(target, batch)
+				r.sendBatch(target, batch, cb)
 			}
 			return
 
 		case event := <-queue:
 			batch = append(batch, event)
 			if len(batch) >= r.batchSize {
-				if err := r.sendBatch(target, batch); err != nil {
-					r.requeueBatch(target, batch)
+				if err := r.sendBatch(target, batch, cb); err != nil {
+					r.handleSendFailure(target, batch, cb)
+				} else {
+					r.handleSendSuccess(target, len(batch), cb)
 				}
 				batch = batch[:0]
 				timer.Reset(r.batchTimeout)
@@ -206,13 +227,60 @@ func (r *Replicator) senderLoop(target string, queue chan *ReplicationEvent) {
 
 		case <-timer.C:
 			if len(batch) > 0 {
-				if err := r.sendBatch(target, batch); err != nil {
-					r.requeueBatch(target, batch)
+				if err := r.sendBatch(target, batch, cb); err != nil {
+					r.handleSendFailure(target, batch, cb)
+				} else {
+					r.handleSendSuccess(target, len(batch), cb)
 				}
 				batch = batch[:0]
 			}
 			timer.Reset(r.batchTimeout)
 		}
+	}
+}
+
+// handleSendSuccess records successful replication.
+func (r *Replicator) handleSendSuccess(target string, count int, cb *circuitbreaker.CircuitBreaker) {
+	cb.RecordSuccess()
+	for i := 0; i < count; i++ {
+		r.metrics.IncReplicaSuccess()
+	}
+
+	// Reset backoff on success
+	r.backoffMu.Lock()
+	delete(r.retryBackoff, target)
+	r.backoffMu.Unlock()
+}
+
+// handleSendFailure handles failed replication with exponential backoff.
+func (r *Replicator) handleSendFailure(target string, batch []*ReplicationEvent, cb *circuitbreaker.CircuitBreaker) {
+	cb.RecordFailure()
+	for i := 0; i < len(batch); i++ {
+		r.metrics.IncReplicaFail()
+	}
+
+	// Calculate backoff
+	r.backoffMu.Lock()
+	failures := r.retryBackoff[target]
+	r.retryBackoff[target] = failures + 1
+	r.backoffMu.Unlock()
+
+	// Exponential backoff: min(2^failures * 100ms, 30s)
+	backoffMs := 100 * (1 << uint(failures))
+	if backoffMs > 30000 {
+		backoffMs = 30000
+	}
+	backoff := time.Duration(backoffMs) * time.Millisecond
+
+	r.log.Warn("replication to %s failed, backing off %v (failures=%d)", target, backoff, failures+1)
+
+	// Wait before requeueing (unless circuit is open)
+	if cb.State() != circuitbreaker.StateOpen {
+		time.Sleep(backoff)
+		r.requeueBatch(target, batch)
+	} else {
+		r.log.Warn("circuit open for %s, dropping %d events", target, len(batch))
+		atomic.AddUint64(&r.droppedEvents, uint64(len(batch)))
 	}
 }
 
@@ -250,7 +318,12 @@ func (r *Replicator) eventToRequest(event *ReplicationEvent) *protocol.Request {
 }
 
 // sendBatch sends a batch of events to a target using protocol encoding.
-func (r *Replicator) sendBatch(target string, batch []*ReplicationEvent) error {
+func (r *Replicator) sendBatch(target string, batch []*ReplicationEvent, cb *circuitbreaker.CircuitBreaker) error {
+	// Check circuit breaker
+	if !cb.Allow() {
+		return fmt.Errorf("circuit breaker open for %s", target)
+	}
+
 	rc, err := r.getConnection(target)
 	if err != nil {
 		return fmt.Errorf("failed to get connection: %w", err)

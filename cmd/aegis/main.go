@@ -2,10 +2,14 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/baxromumarov/aegisKV/pkg/config"
 	"github.com/baxromumarov/aegisKV/pkg/logger"
@@ -43,6 +47,16 @@ func main() {
 
 		// Log level
 		logLevel = flag.String("log-level", "info", "Log level: debug, info, warn, error")
+
+		// Quorum
+		writeQuorum = flag.Int("write-quorum", 0, "Write quorum (0=async, -1=all)")
+		readQuorum  = flag.Int("read-quorum", 0, "Read quorum (0=local only)")
+
+		// Graceful shutdown
+		drainTimeout = flag.Duration("drain-timeout", 30*time.Second, "Time to wait for in-flight requests")
+
+		// PID file
+		pidFile = flag.String("pid-file", "", "Path to PID file")
 	)
 
 	flag.Parse()
@@ -137,6 +151,16 @@ func main() {
 		cfg.RateBurst = *rateBurst
 	}
 
+	// Quorum settings
+	cfg.WriteQuorum = *writeQuorum
+	cfg.ReadQuorum = *readQuorum
+
+	// Graceful shutdown
+	cfg.DrainTimeout = *drainTimeout
+
+	// PID file
+	cfg.PIDFile = *pidFile
+
 	if err := cfg.Validate(); err != nil {
 		logger.Error("Invalid configuration: %v", err)
 		os.Exit(1)
@@ -174,15 +198,115 @@ func main() {
 		logger.Info("  Health endpoint: %s", cfg.HealthAddr)
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	sig := <-sigCh
-	logger.Info("Received signal %v, shutting down...", sig)
-
-	if err := n.Stop(); err != nil {
-		logger.Error("Error during shutdown: %v", err)
+	// Write PID file
+	if cfg.PIDFile != "" {
+		if err := writePIDFile(cfg.PIDFile); err != nil {
+			logger.Error("Failed to write PID file: %v", err)
+		} else {
+			defer removePIDFile(cfg.PIDFile)
+			logger.Info("  PID file: %s", cfg.PIDFile)
+		}
 	}
 
-	logger.Info("Shutdown complete")
+	// Signal handling with SIGHUP for config reload
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+
+	var configPath atomic.Value
+	configPath.Store(*configFile)
+
+	for {
+		sig := <-sigCh
+
+		switch sig {
+		case syscall.SIGHUP:
+			// Reload configuration
+			cfgPath := configPath.Load().(string)
+			if cfgPath == "" {
+				logger.Warn("SIGHUP received but no config file specified, ignoring")
+				continue
+			}
+
+			logger.Info("SIGHUP received, reloading config from %s", cfgPath)
+			newCfg, err := config.LoadFromFile(cfgPath)
+			if err != nil {
+				logger.Error("Failed to reload config: %v", err)
+				continue
+			}
+
+			// Apply hot-reloadable settings
+			applyHotReload(n, newCfg)
+			logger.Info("Configuration reloaded successfully")
+
+		case syscall.SIGINT, syscall.SIGTERM:
+			logger.Info("Received signal %v, initiating graceful shutdown...", sig)
+
+			// Graceful drain with timeout
+			drainDone := make(chan struct{})
+			go func() {
+				if err := n.Stop(); err != nil {
+					logger.Error("Error during shutdown: %v", err)
+				}
+				close(drainDone)
+			}()
+
+			select {
+			case <-drainDone:
+				logger.Info("Graceful shutdown complete")
+			case <-time.After(cfg.DrainTimeout):
+				logger.Warn("Drain timeout exceeded (%v), forcing shutdown", cfg.DrainTimeout)
+			}
+
+			return
+		}
+	}
+}
+
+// writePIDFile writes the current process ID to a file.
+func writePIDFile(path string) error {
+	pid := os.Getpid()
+	return os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0644)
+}
+
+// removePIDFile removes the PID file.
+func removePIDFile(path string) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		logger.Warn("Failed to remove PID file: %v", err)
+	}
+}
+
+// applyHotReload applies configuration changes that can be reloaded at runtime.
+func applyHotReload(n *node.Node, newCfg *config.Config) {
+	// Log level can be changed at runtime
+	switch strings.ToLower(newCfg.LogLevel) {
+	case "debug":
+		logger.SetLevel(logger.LevelDebug)
+	case "info":
+		logger.SetLevel(logger.LevelInfo)
+	case "warn", "warning":
+		logger.SetLevel(logger.LevelWarn)
+	case "error":
+		logger.SetLevel(logger.LevelError)
+	}
+
+	// Rate limiting could be updated if server exposes SetRateLimit
+	// (Future: add server.SetRateLimit(newCfg.RateLimit, newCfg.RateBurst))
+
+	logger.Info("  Applied: log_level=%s", newCfg.LogLevel)
+}
+
+// version info (can be set at build time)
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+)
+
+func init() {
+	// Print version if requested
+	for _, arg := range os.Args[1:] {
+		if arg == "-version" || arg == "--version" {
+			fmt.Printf("AegisKV %s (built %s)\n", Version, BuildTime)
+			os.Exit(0)
+		}
+	}
 }

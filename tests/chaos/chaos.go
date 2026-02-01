@@ -57,7 +57,7 @@ type FaultEvent struct {
 	StartTime time.Time
 	EndTime   time.Time
 	Duration  time.Duration
-	Params    map[string]interface{}
+	Params    map[string]any
 }
 
 // ChaosController manages fault injection.
@@ -217,7 +217,7 @@ func (c *ChaosController) injectRandomFault() {
 		NodeID:    node.ID(),
 		StartTime: time.Now(),
 		Duration:  c.faultDuration,
-		Params:    make(map[string]interface{}),
+		Params:    make(map[string]any),
 	}
 
 	// Inject fault

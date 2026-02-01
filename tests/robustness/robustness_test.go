@@ -320,7 +320,7 @@ func NewInvariantChecker() *InvariantChecker {
 }
 
 // Check records a check result.
-func (c *InvariantChecker) Check(name string, condition bool, format string, args ...interface{}) {
+func (c *InvariantChecker) Check(name string, condition bool, format string, args ...any) {
 	atomic.AddInt64(&c.totalChecks, 1)
 	if !condition {
 		c.mu.Lock()
@@ -768,7 +768,7 @@ func TestChaosUnderLoad(t *testing.T) {
 	durabilityChecks := 0
 	durabilityFailures := 0
 	valueMismatches := 0 // Expected due to concurrent writes to same key
-	confirmedWrites.Range(func(k, v interface{}) bool {
+	confirmedWrites.Range(func(k, v any) bool {
 		key := k.(string)
 		expectedValue := v.(string)
 		durabilityChecks++

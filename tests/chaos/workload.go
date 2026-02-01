@@ -336,7 +336,7 @@ func (s WorkloadStats) OpsPerSecond(duration time.Duration) float64 {
 // ValidateData validates that written data is still readable.
 // For each tracked key, it verifies the stored value matches the last successful write.
 func (w *Workload) ValidateData() (validated int, errors int, missing int) {
-	w.writtenKeys.Range(func(key, value interface{}) bool {
+	w.writtenKeys.Range(func(key, value any) bool {
 		keyStr := key.(string)
 		rec := value.(writeRecord)
 		expectedValue := rec.value
@@ -367,7 +367,7 @@ func (w *Workload) ValidateData() (validated int, errors int, missing int) {
 // GetWrittenKeyCount returns the number of tracked written keys.
 func (w *Workload) GetWrittenKeyCount() int {
 	count := 0
-	w.writtenKeys.Range(func(_, _ interface{}) bool {
+	w.writtenKeys.Range(func(_, _ any) bool {
 		count++
 		return true
 	})

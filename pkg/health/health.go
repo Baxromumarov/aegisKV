@@ -10,7 +10,7 @@ import (
 )
 
 // StatsFunc is a function that returns node statistics.
-type StatsFunc func() map[string]interface{}
+type StatsFunc func() map[string]any
 
 // Server is an HTTP server for health checks.
 type Server struct {
@@ -76,7 +76,7 @@ func (s *Server) SetReady(ready bool) {
 // handleHealth returns basic health status.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"status":  "healthy",
 		"node_id": s.nodeID,
 		"time":    time.Now().UTC().Format(time.RFC3339),
@@ -92,14 +92,14 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if !ready {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"status":  "not_ready",
 			"node_id": s.nodeID,
 		})
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"status":  "ready",
 		"node_id": s.nodeID,
 	})
@@ -109,7 +109,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"node_id": s.nodeID,
 		"time":    time.Now().UTC().Format(time.RFC3339),
 	}

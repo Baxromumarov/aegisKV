@@ -77,6 +77,16 @@ type Config struct {
 	// Logging
 	LogLevel string `json:"log_level"` // "debug", "info", "warn", "error"
 
+	// Quorum consistency
+	WriteQuorum int `json:"write_quorum"` // Min writes for success (0 = async, -1 = all)
+	ReadQuorum  int `json:"read_quorum"`  // Min reads for consistency (0 = local only)
+
+	// Graceful shutdown
+	DrainTimeout time.Duration `json:"drain_timeout"` // Time to wait for in-flight requests
+
+	// PID file
+	PIDFile string `json:"pid_file"` // Path to PID file (empty = disabled)
+
 	// Runtime TLS config (not serialized)
 	TLSConfig *tls.Config `json:"-"`
 }
