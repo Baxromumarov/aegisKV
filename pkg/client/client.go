@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -32,15 +33,19 @@ type Client struct {
 	maxRetries   int
 	nextReqID    uint64
 	closed       bool
+	authToken    string
+	tlsConfig    *tls.Config
 }
 
 // connPool manages a pool of connections to a single node.
 type connPool struct {
-	mu      sync.Mutex
-	addr    string
-	conns   chan *poolConn
-	maxSize int
-	timeout time.Duration
+	mu        sync.Mutex
+	addr      string
+	conns     chan *poolConn
+	maxSize   int
+	timeout   time.Duration
+	authToken string
+	tlsConfig *tls.Config
 }
 
 // poolConn wraps a connection with buffered I/O.
@@ -60,6 +65,8 @@ type Config struct {
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 	MaxRetries   int
+	AuthToken    string
+	TLSConfig    *tls.Config
 }
 
 // New creates a new client.
@@ -88,6 +95,8 @@ func New(cfg Config) *Client {
 		readTimeout:  cfg.ReadTimeout,
 		writeTimeout: cfg.WriteTimeout,
 		maxRetries:   cfg.MaxRetries,
+		authToken:    cfg.AuthToken,
+		tlsConfig:    cfg.TLSConfig,
 	}
 }
 
@@ -304,10 +313,12 @@ func (c *Client) getPool(addr string) *connPool {
 	}
 
 	pool = &connPool{
-		addr:    addr,
-		conns:   make(chan *poolConn, c.maxConns),
-		maxSize: c.maxConns,
-		timeout: c.connTimeout,
+		addr:      addr,
+		conns:     make(chan *poolConn, c.maxConns),
+		maxSize:   c.maxConns,
+		timeout:   c.connTimeout,
+		authToken: c.authToken,
+		tlsConfig: c.tlsConfig,
 	}
 	c.pools[addr] = pool
 
@@ -325,9 +336,17 @@ func (p *connPool) get() (*poolConn, error) {
 	return p.dial()
 }
 
-// dial creates a new connection.
+// dial creates a new connection with optional TLS and authentication.
 func (p *connPool) dial() (*poolConn, error) {
-	conn, err := net.DialTimeout("tcp", p.addr, p.timeout)
+	var conn net.Conn
+	var err error
+
+	if p.tlsConfig != nil {
+		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: p.timeout}, "tcp", p.addr, p.tlsConfig)
+	} else {
+		conn, err = net.DialTimeout("tcp", p.addr, p.timeout)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -335,13 +354,51 @@ func (p *connPool) dial() (*poolConn, error) {
 	reader := bufio.NewReaderSize(conn, 64*1024)
 	writer := bufio.NewWriterSize(conn, 64*1024)
 
-	return &poolConn{
+	pc := &poolConn{
 		conn:    conn,
 		reader:  reader,
 		writer:  writer,
 		encoder: protocol.NewEncoder(writer),
 		decoder: protocol.NewDecoder(reader),
-	}, nil
+	}
+
+	// Authenticate if token is set
+	if p.authToken != "" {
+		if err := p.authenticate(pc); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("authentication failed: %w", err)
+		}
+	}
+
+	return pc, nil
+}
+
+// authenticate sends an AUTH request.
+func (p *connPool) authenticate(pc *poolConn) error {
+	req := &protocol.Request{
+		Command:   protocol.CmdAuth,
+		Value:     []byte(p.authToken),
+		RequestID: uint64(time.Now().UnixNano()),
+	}
+
+	if err := pc.encoder.EncodeRequest(req); err != nil {
+		return err
+	}
+	if err := pc.writer.Flush(); err != nil {
+		return err
+	}
+
+	pc.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := pc.decoder.DecodeResponse()
+	if err != nil {
+		return err
+	}
+
+	if resp.Status != protocol.StatusOK {
+		return fmt.Errorf("auth rejected: %s", resp.Error)
+	}
+
+	return nil
 }
 
 // put returns a connection to the pool.

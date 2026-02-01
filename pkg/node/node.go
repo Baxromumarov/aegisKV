@@ -1,14 +1,16 @@
 package node
 
 import (
+	"encoding/binary"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/baxromumarov/aegisKV/pkg/config"
 	"github.com/baxromumarov/aegisKV/pkg/consistent"
 	"github.com/baxromumarov/aegisKV/pkg/gossip"
+	"github.com/baxromumarov/aegisKV/pkg/health"
+	"github.com/baxromumarov/aegisKV/pkg/logger"
 	"github.com/baxromumarov/aegisKV/pkg/protocol"
 	"github.com/baxromumarov/aegisKV/pkg/replication"
 	"github.com/baxromumarov/aegisKV/pkg/server"
@@ -28,9 +30,11 @@ type Node struct {
 	gossiper   *gossip.Gossip
 	replicator *replication.Replicator
 	srv        *server.Server
+	healthSrv  *health.Server
 	members    map[string]types.NodeInfo
 	stopCh     chan struct{}
 	wg         sync.WaitGroup
+	log        *logger.Logger
 }
 
 // New creates a new Node.
@@ -69,6 +73,7 @@ func New(cfg *config.Config) (*Node, error) {
 		walLog:   walLog,
 		members:  make(map[string]types.NodeInfo),
 		stopCh:   make(chan struct{}),
+		log:      logger.New("node", logger.ParseLevel(cfg.LogLevel), nil),
 	}
 
 	gossiper, err := gossip.New(gossip.Config{
@@ -82,6 +87,7 @@ func New(cfg *config.Config) (*Node, error) {
 		OnNodeJoin:     n.onNodeJoin,
 		OnNodeLeave:    n.onNodeLeave,
 		OnNodeSuspect:  n.onNodeSuspect,
+		ClusterSecret:  cfg.GossipSecret,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gossip: %w", err)
@@ -94,6 +100,8 @@ func New(cfg *config.Config) (*Node, error) {
 		BatchTimeout: cfg.ReplicationBatchTimeout,
 		MaxRetries:   cfg.ReplicationMaxRetries,
 		GetNodeAddr:  n.getNodeAddr,
+		AuthToken:    cfg.AuthToken,
+		TLSConfig:    cfg.TLSConfig,
 	})
 
 	n.srv = server.New(server.Config{
@@ -102,7 +110,16 @@ func New(cfg *config.Config) (*Node, error) {
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 		MaxConns:     cfg.MaxConns,
+		AuthToken:    cfg.AuthToken,
+		TLSConfig:    cfg.TLSConfig,
+		RateLimit:    cfg.RateLimit,
+		RateBurst:    cfg.RateBurst,
 	})
+
+	// Create health server
+	if cfg.HealthAddr != "" {
+		n.healthSrv = health.New(cfg.HealthAddr, cfg.NodeID, n.statsFunc)
+	}
 
 	return n, nil
 }
@@ -125,7 +142,7 @@ func (n *Node) Start() error {
 
 	if len(n.cfg.Seeds) > 0 {
 		if err := n.gossiper.Join(n.cfg.Seeds); err != nil {
-			log.Printf("Warning: failed to join cluster: %v", err)
+			n.log.Warn("failed to join cluster: %v", err)
 		}
 	}
 
@@ -137,10 +154,19 @@ func (n *Node) Start() error {
 		return fmt.Errorf("failed to start server: %w", err)
 	}
 
+	// Start health server
+	if n.healthSrv != nil {
+		if err := n.healthSrv.Start(); err != nil {
+			n.log.Warn("failed to start health server: %v", err)
+		} else {
+			n.healthSrv.SetReady(true)
+		}
+	}
+
 	n.wg.Add(1)
 	go n.maintenanceLoop()
 
-	log.Printf("Node %s started, listening on %s", n.nodeID, n.cfg.BindAddr)
+	n.log.Info("Node %s started, listening on %s", n.nodeID, n.cfg.BindAddr)
 	return nil
 }
 
@@ -149,16 +175,21 @@ func (n *Node) Stop() error {
 	close(n.stopCh)
 	n.wg.Wait()
 
+	if n.healthSrv != nil {
+		n.healthSrv.Stop()
+	}
+
 	n.gossiper.Leave()
 	n.gossiper.Stop()
 	n.replicator.Stop()
 	n.srv.Stop()
+	n.shardMgr.Close()
 
 	if n.walLog != nil {
 		n.walLog.Close()
 	}
 
-	log.Printf("Node %s stopped", n.nodeID)
+	n.log.Info("Node %s stopped", n.nodeID)
 	return nil
 }
 
@@ -238,8 +269,74 @@ func (n *Node) HandleDelete(key []byte) error {
 	return nil
 }
 
-// HandleReplicate handles replication requests.
+// HandleReplicate handles replication requests from other nodes.
+// Value format: [1B type][8B shardID][8B term][8B seq][8B ttlNanos][actual value]
 func (n *Node) HandleReplicate(req *protocol.Request) error {
+	// Minimum payload: 1 + 8 + 8 + 8 + 8 = 33 bytes
+	if len(req.Value) < 33 {
+		return fmt.Errorf("invalid replication payload: too short")
+	}
+
+	offset := 0
+
+	// Decode metadata
+	eventType := req.Value[offset]
+	offset++
+
+	shardID := binary.BigEndian.Uint64(req.Value[offset:])
+	offset += 8
+
+	term := binary.BigEndian.Uint64(req.Value[offset:])
+	offset += 8
+
+	seq := binary.BigEndian.Uint64(req.Value[offset:])
+	offset += 8
+
+	ttlNanos := binary.BigEndian.Uint64(req.Value[offset:])
+	offset += 8
+
+	actualValue := req.Value[offset:]
+
+	// Get the shard
+	s, err := n.shardMgr.GetShardByID(shardID)
+	if err != nil {
+		// Not owned by this node - ignore silently
+		return nil
+	}
+
+	version := types.Version{Term: term, Seq: seq}
+
+	switch eventType {
+	case 0: // EventTypeSet
+		var expiry int64
+		if ttlNanos > 0 {
+			expiry = time.Now().Add(time.Duration(ttlNanos)).UnixMilli()
+		}
+
+		entry := &types.Entry{
+			Key:     req.Key,
+			Value:   actualValue,
+			Expiry:  expiry,
+			Version: version,
+			Created: time.Now(),
+		}
+
+		s.ApplyReplicated(entry)
+
+		// WAL the replicated data
+		if n.walLog != nil && n.walLog.Mode() != types.WALModeOff {
+			n.walLog.AppendSet(shardID, req.Key, actualValue, time.Duration(ttlNanos).Milliseconds(), version)
+		}
+
+	case 1: // EventTypeDelete
+		s.Delete(string(req.Key))
+
+		// WAL the delete
+		if n.walLog != nil && n.walLog.Mode() != types.WALModeOff {
+			n.walLog.AppendDelete(shardID, req.Key, version)
+		}
+	}
+
 	return nil
 }
 
@@ -296,7 +393,7 @@ func (n *Node) getClientAddr(nodeID string) string {
 
 // onNodeJoin handles a node joining the cluster.
 func (n *Node) onNodeJoin(info types.NodeInfo) {
-	log.Printf("Node joined: %s at %s", info.ID, info.Addr)
+	n.log.Info("Node joined: %s at %s", info.ID, info.Addr)
 
 	n.mu.Lock()
 	n.members[info.ID] = info
@@ -309,7 +406,7 @@ func (n *Node) onNodeJoin(info types.NodeInfo) {
 
 // onNodeLeave handles a node leaving the cluster.
 func (n *Node) onNodeLeave(info types.NodeInfo) {
-	log.Printf("Node left: %s", info.ID)
+	n.log.Info("Node left: %s", info.ID)
 
 	n.mu.Lock()
 	delete(n.members, info.ID)
@@ -322,7 +419,7 @@ func (n *Node) onNodeLeave(info types.NodeInfo) {
 
 // onNodeSuspect handles a suspected node.
 func (n *Node) onNodeSuspect(info types.NodeInfo) {
-	log.Printf("Node suspected: %s", info.ID)
+	n.log.Warn("Node suspected: %s", info.ID)
 }
 
 // recomputeShards recomputes shard ownership after cluster changes.
@@ -331,10 +428,10 @@ func (n *Node) recomputeShards() {
 	acquire, release := n.shardMgr.RecomputeOwnership()
 
 	if len(acquire) > 0 {
-		log.Printf("Acquiring shards: %v", acquire)
+		n.log.Info("Acquiring shards: %v", acquire)
 	}
 	if len(release) > 0 {
-		log.Printf("Releasing shards: %v", release)
+		n.log.Info("Releasing shards: %v", release)
 	}
 }
 
@@ -358,7 +455,7 @@ func (n *Node) recoverFromWAL() error {
 				Value:   rec.Value,
 				Expiry:  expiry,
 				Version: rec.Version,
-				Created: time.Now(),
+				Created: time.Unix(0, rec.Timestamp),
 			}
 			shard.ApplyReplicated(entry)
 		case wal.OpDelete:
@@ -373,7 +470,7 @@ func (n *Node) recoverFromWAL() error {
 	}
 
 	if count > 0 {
-		log.Printf("Recovered %d entries from WAL", count)
+		n.log.Info("Recovered %d entries from WAL", count)
 	}
 	return nil
 }
@@ -382,7 +479,12 @@ func (n *Node) recoverFromWAL() error {
 func (n *Node) maintenanceLoop() {
 	defer n.wg.Done()
 
-	ticker := time.NewTicker(time.Minute)
+	interval := n.cfg.MaintenanceInterval
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -415,7 +517,7 @@ func (n *Node) Stats() NodeStats {
 		TotalShards:     shardStats.TotalShards,
 		PrimaryShards:   shardStats.PrimaryShards,
 		FollowerShards:  shardStats.FollowerShards,
-		PendingReplicas: replStats.PendingEvents,
+		DroppedReplicas: replStats.DroppedEvents,
 		ClusterSize:     len(n.gossiper.Members()) + 1,
 	}
 }
@@ -428,7 +530,7 @@ type NodeStats struct {
 	TotalShards     int
 	PrimaryShards   int
 	FollowerShards  int
-	PendingReplicas int
+	DroppedReplicas uint64
 	ClusterSize     int
 }
 
@@ -440,4 +542,18 @@ func (n *Node) NodeID() string {
 // Members returns the cluster members.
 func (n *Node) Members() []types.NodeInfo {
 	return n.gossiper.Members()
+}
+
+// statsFunc returns node stats for the health server.
+func (n *Node) statsFunc() map[string]interface{} {
+	stats := n.Stats()
+	return map[string]interface{}{
+		"active_conns":     stats.ActiveConns,
+		"total_requests":   stats.TotalRequests,
+		"total_shards":     stats.TotalShards,
+		"primary_shards":   stats.PrimaryShards,
+		"follower_shards":  stats.FollowerShards,
+		"dropped_replicas": stats.DroppedReplicas,
+		"cluster_size":     stats.ClusterSize,
+	}
 }

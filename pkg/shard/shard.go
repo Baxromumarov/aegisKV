@@ -238,3 +238,8 @@ func (s *Shard) CleanExpired() int {
 	defer s.mu.Unlock()
 	return s.cache.CleanExpired()
 }
+
+// Close closes the shard and releases resources.
+func (s *Shard) Close() {
+	s.cache.Close()
+}

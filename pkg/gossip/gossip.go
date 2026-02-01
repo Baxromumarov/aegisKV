@@ -2,6 +2,8 @@ package gossip
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -63,6 +65,7 @@ type Gossip struct {
 	onNodeSuspect  func(types.NodeInfo)
 	stopCh         chan struct{}
 	wg             sync.WaitGroup
+	clusterSecret  []byte // HMAC key for message signing
 }
 
 // Config holds configuration for the gossip protocol.
@@ -71,6 +74,7 @@ type Config struct {
 	BindAddr       string
 	AdvertiseAddr  string // Address to advertise to other nodes (for containers/NAT)
 	ClientAddr     string // Client-facing address for redirects
+	ClusterSecret  string // HMAC key for message signing (optional)
 	Seeds          []string
 	PingInterval   time.Duration
 	SuspectTimeout time.Duration
@@ -117,6 +121,7 @@ func New(cfg Config) (*Gossip, error) {
 		onNodeLeave:    cfg.OnNodeLeave,
 		onNodeSuspect:  cfg.OnNodeSuspect,
 		stopCh:         make(chan struct{}),
+		clusterSecret:  []byte(cfg.ClusterSecret),
 	}
 
 	return g, nil
@@ -124,7 +129,7 @@ func New(cfg Config) (*Gossip, error) {
 
 // Start starts the gossip protocol.
 func (g *Gossip) Start() error {
-	// Use ListenConfig with SO_REUSEADDR to allow quick restarts
+	// Use ListenConfig with SO_REUSEADDR only (removed SO_REUSEPORT for security)
 	lc := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			var opErr error
@@ -271,8 +276,28 @@ func (g *Gossip) receiveLoop() {
 			continue
 		}
 
+		data := buf[:n]
+
+		// Verify HMAC if cluster secret is configured
+		if len(g.clusterSecret) > 0 {
+			if n < 32 {
+				// Message too short to contain HMAC
+				continue
+			}
+			msgData := data[:n-32]
+			msgMAC := data[n-32:]
+			mac := hmac.New(sha256.New, g.clusterSecret)
+			mac.Write(msgData)
+			expectedMAC := mac.Sum(nil)
+			if !hmac.Equal(msgMAC, expectedMAC) {
+				// Invalid HMAC, drop message
+				continue
+			}
+			data = msgData
+		}
+
 		var msg Message
-		if err := json.Unmarshal(buf[:n], &msg); err != nil {
+		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
 		}
 
@@ -492,6 +517,9 @@ func (g *Gossip) checkTimeouts() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	// Collect IDs to remove after iteration
+	var toRemove []string
+
 	for id, m := range g.members {
 		if id == g.nodeID {
 			continue
@@ -515,15 +543,38 @@ func (g *Gossip) checkTimeouts() {
 					go g.onNodeLeave(m.info)
 				}
 			}
+		case types.NodeStateDead:
+			// Remove dead nodes after 3x deadTimeout
+			if now.Sub(m.suspectTime) > 3*g.deadTimeout {
+				toRemove = append(toRemove, id)
+			}
+		case types.NodeStateLeft:
+			// Remove left nodes after deadTimeout
+			if timeSinceSeen > g.deadTimeout {
+				toRemove = append(toRemove, id)
+			}
 		}
+	}
+
+	// Remove collected nodes
+	for _, id := range toRemove {
+		delete(g.members, id)
 	}
 }
 
 // sendTo sends a message to an address.
+// If clusterSecret is set, appends HMAC-SHA256 signature (32 bytes).
 func (g *Gossip) sendTo(addr string, msg *Message) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
+	}
+
+	// Append HMAC signature if cluster secret is configured
+	if len(g.clusterSecret) > 0 {
+		mac := hmac.New(sha256.New, g.clusterSecret)
+		mac.Write(data)
+		data = append(data, mac.Sum(nil)...)
 	}
 
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)

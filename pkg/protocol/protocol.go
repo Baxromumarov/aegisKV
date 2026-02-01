@@ -22,6 +22,7 @@ const (
 	CmdSync
 	CmdSyncAck
 	CmdStats
+	CmdAuth // 12 - Authentication handshake
 )
 
 // Response status codes.
@@ -65,14 +66,15 @@ type Response struct {
 	Error     string
 }
 
-// Encoder encodes protocol messages.
+// Encoder encodes protocol messages with reusable buffers.
 type Encoder struct {
-	w io.Writer
+	w   io.Writer
+	buf []byte // reusable buffer, grown as needed
 }
 
 // NewEncoder creates a new encoder.
 func NewEncoder(w io.Writer) *Encoder {
-	return &Encoder{w: w}
+	return &Encoder{w: w, buf: make([]byte, 0, 4096)}
 }
 
 // EncodeRequest encodes a request to the wire format.
@@ -84,14 +86,18 @@ func (e *Encoder) EncodeRequest(req *Request) error {
 	headerSize := 1 + 1 + 1 + 8 + 4 + 4 + 8 + 8
 	totalSize := headerSize + int(keyLen) + int(valLen)
 
-	// Length prefix (4 bytes)
-	lenBuf := make([]byte, 4)
-	binary.BigEndian.PutUint32(lenBuf, uint32(totalSize))
-	if _, err := e.w.Write(lenBuf); err != nil {
-		return err
+	// Grow reusable buffer if needed (4 byte length prefix + payload)
+	needed := 4 + totalSize
+	if cap(e.buf) < needed {
+		e.buf = make([]byte, needed)
+	} else {
+		e.buf = e.buf[:needed]
 	}
 
-	buf := make([]byte, totalSize)
+	// Length prefix
+	binary.BigEndian.PutUint32(e.buf[0:4], uint32(totalSize))
+
+	buf := e.buf[4:]
 	offset := 0
 
 	buf[offset] = MagicByte
@@ -121,7 +127,7 @@ func (e *Encoder) EncodeRequest(req *Request) error {
 
 	copy(buf[offset:], req.Value)
 
-	_, err := e.w.Write(buf)
+	_, err := e.w.Write(e.buf[:needed])
 	return err
 }
 
@@ -136,13 +142,16 @@ func (e *Encoder) EncodeResponse(resp *Response) error {
 	headerSize := 1 + 1 + 1 + 8 + 4 + 4 + 8 + 8 + 4 + 4
 	totalSize := headerSize + int(keyLen) + int(valLen) + int(errLen) + int(addrLen)
 
-	lenBuf := make([]byte, 4)
-	binary.BigEndian.PutUint32(lenBuf, uint32(totalSize))
-	if _, err := e.w.Write(lenBuf); err != nil {
-		return err
+	needed := 4 + totalSize
+	if cap(e.buf) < needed {
+		e.buf = make([]byte, needed)
+	} else {
+		e.buf = e.buf[:needed]
 	}
 
-	buf := make([]byte, totalSize)
+	binary.BigEndian.PutUint32(e.buf[0:4], uint32(totalSize))
+
+	buf := e.buf[4:]
 	offset := 0
 
 	buf[offset] = MagicByte
@@ -184,13 +193,14 @@ func (e *Encoder) EncodeResponse(resp *Response) error {
 
 	copy(buf[offset:], resp.NodeAddr)
 
-	_, err := e.w.Write(buf)
+	_, err := e.w.Write(e.buf[:needed])
 	return err
 }
 
 // Decoder decodes protocol messages.
 type Decoder struct {
-	r io.Reader
+	r      io.Reader
+	lenBuf [4]byte // fixed-size, avoids allocation per decode
 }
 
 // NewDecoder creates a new decoder.
@@ -200,11 +210,10 @@ func NewDecoder(r io.Reader) *Decoder {
 
 // DecodeRequest decodes a request from the wire format.
 func (d *Decoder) DecodeRequest() (*Request, error) {
-	lenBuf := make([]byte, 4)
-	if _, err := io.ReadFull(d.r, lenBuf); err != nil {
+	if _, err := io.ReadFull(d.r, d.lenBuf[:]); err != nil {
 		return nil, err
 	}
-	totalLen := binary.BigEndian.Uint32(lenBuf)
+	totalLen := binary.BigEndian.Uint32(d.lenBuf[:])
 
 	if totalLen > MaxValueLen+MaxKeyLen+100 {
 		return nil, errors.New("message too large")
@@ -266,11 +275,10 @@ func (d *Decoder) DecodeRequest() (*Request, error) {
 
 // DecodeResponse decodes a response from the wire format.
 func (d *Decoder) DecodeResponse() (*Response, error) {
-	lenBuf := make([]byte, 4)
-	if _, err := io.ReadFull(d.r, lenBuf); err != nil {
+	if _, err := io.ReadFull(d.r, d.lenBuf[:]); err != nil {
 		return nil, err
 	}
-	totalLen := binary.BigEndian.Uint32(lenBuf)
+	totalLen := binary.BigEndian.Uint32(d.lenBuf[:])
 
 	if totalLen > MaxValueLen+MaxKeyLen+1000 {
 		return nil, errors.New("message too large")
@@ -364,6 +372,8 @@ func CommandName(cmd CommandType) string {
 		return "SYNC_ACK"
 	case CmdStats:
 		return "STATS"
+	case CmdAuth:
+		return "AUTH"
 	default:
 		return "UNKNOWN"
 	}

@@ -402,8 +402,18 @@ func (c *ChaosController) getRunningNodes() []NodeController {
 func (c *ChaosController) addNetworkLatency(node NodeController, latencyMs int) error {
 	// Add latency using tc netem on localhost traffic to node's port
 	// This is simplified - in production you'd need proper network namespace handling
-	cmd := exec.Command("tc", "qdisc", "add", "dev", "lo", "root", "netem", "delay",
-		fmt.Sprintf("%dms", latencyMs), fmt.Sprintf("%dms", latencyMs/4))
+	cmd := exec.Command(
+		"tc",
+		"qdisc",
+		"add",
+		"dev",
+		"lo",
+		"root",
+		"netem",
+		"delay",
+		fmt.Sprintf("%dms", latencyMs),
+		fmt.Sprintf("%dms", latencyMs/4),
+	)
 	return cmd.Run()
 }
 

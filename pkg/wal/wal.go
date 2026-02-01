@@ -52,7 +52,7 @@ func New(dir string, mode types.WALMode, maxFileSize int64) (*WAL, error) {
 		return &WAL{mode: mode}, nil
 	}
 
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create WAL directory: %w", err)
 	}
 
@@ -95,7 +95,7 @@ func (w *WAL) openNewFile() error {
 	w.fileSeq++
 	filename := filepath.Join(w.dir, fmt.Sprintf("wal-%d.log", w.fileSeq))
 
-	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create WAL file: %w", err)
 	}
@@ -130,11 +130,12 @@ func (w *WAL) Append(rec *Record) error {
 
 	// For Write mode: flush to kernel buffer (survives process crash, not power loss)
 	// For Fsync mode: flush + sync to disk (survives power loss)
-	if w.mode == types.WALModeWrite {
+	switch w.mode {
+	case types.WALModeWrite:
 		if err := w.writer.Flush(); err != nil {
 			return fmt.Errorf("failed to flush WAL: %w", err)
 		}
-	} else if w.mode == types.WALModeFsync {
+	case types.WALModeFsync:
 		if err := w.writer.Flush(); err != nil {
 			return fmt.Errorf("failed to flush WAL: %w", err)
 		}

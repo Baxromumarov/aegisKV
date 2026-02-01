@@ -2,14 +2,13 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"github.com/baxromumarov/aegisKV/pkg/config"
+	"github.com/baxromumarov/aegisKV/pkg/logger"
 	"github.com/baxromumarov/aegisKV/pkg/node"
 )
 
@@ -27,9 +26,40 @@ func main() {
 		numShards       = flag.Int("shards", 256, "Number of shards")
 		walMode         = flag.String("wal", "off", "WAL mode: off, write, fsync")
 		maxMemoryMB     = flag.Int64("max-memory", 1024, "Maximum memory in MB")
+
+		// Security flags
+		authToken    = flag.String("auth-token", "", "Shared authentication token for clients and replication")
+		tlsCert      = flag.String("tls-cert", "", "Path to TLS certificate file")
+		tlsKey       = flag.String("tls-key", "", "Path to TLS key file")
+		tlsCA        = flag.String("tls-ca", "", "Path to TLS CA certificate for mTLS")
+		gossipSecret = flag.String("gossip-secret", "", "Shared secret for gossip HMAC signing")
+
+		// Health and observability
+		healthAddr = flag.String("health-addr", "", "Address for HTTP health endpoints (e.g. :8080)")
+
+		// Rate limiting
+		rateLimitRPS = flag.Float64("rate-limit", 0, "Per-connection requests per second (0=disabled)")
+		rateBurst    = flag.Int("rate-burst", 10, "Rate limit burst size")
+
+		// Log level
+		logLevel = flag.String("log-level", "info", "Log level: debug, info, warn, error")
 	)
 
 	flag.Parse()
+
+	// Configure logger level
+	switch strings.ToLower(*logLevel) {
+	case "debug":
+		logger.SetLevel(logger.LevelDebug)
+	case "info":
+		logger.SetLevel(logger.LevelInfo)
+	case "warn", "warning":
+		logger.SetLevel(logger.LevelWarn)
+	case "error":
+		logger.SetLevel(logger.LevelError)
+	default:
+		logger.SetLevel(logger.LevelInfo)
+	}
 
 	var cfg *config.Config
 	var err error
@@ -37,12 +67,14 @@ func main() {
 	if *configFile != "" {
 		cfg, err = config.LoadFromFile(*configFile)
 		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
+			logger.Error("Failed to load config: %v", err)
+			os.Exit(1)
 		}
 	} else {
 		cfg = config.DefaultConfig()
 	}
 
+	// Apply command-line overrides
 	if *nodeID != "" {
 		cfg.NodeID = *nodeID
 	}
@@ -77,40 +109,80 @@ func main() {
 		cfg.MaxMemoryMB = *maxMemoryMB
 	}
 
+	// Security overrides
+	if *authToken != "" {
+		cfg.AuthToken = *authToken
+	}
+	if *tlsCert != "" {
+		cfg.TLSCertFile = *tlsCert
+	}
+	if *tlsKey != "" {
+		cfg.TLSKeyFile = *tlsKey
+	}
+	if *tlsCA != "" {
+		cfg.TLSCAFile = *tlsCA
+	}
+	if *gossipSecret != "" {
+		cfg.GossipSecret = *gossipSecret
+	}
+
+	// Health endpoint
+	if *healthAddr != "" {
+		cfg.HealthAddr = *healthAddr
+	}
+
+	// Rate limiting
+	if *rateLimitRPS > 0 {
+		cfg.RateLimit = *rateLimitRPS
+		cfg.RateBurst = *rateBurst
+	}
+
 	if err := cfg.Validate(); err != nil {
-		log.Fatalf("Invalid configuration: %v", err)
+		logger.Error("Invalid configuration: %v", err)
+		os.Exit(1)
 	}
 
 	n, err := node.New(cfg)
 	if err != nil {
-		log.Fatalf("Failed to create node: %v", err)
+		logger.Error("Failed to create node: %v", err)
+		os.Exit(1)
 	}
 
 	if err := n.Start(); err != nil {
-		log.Fatalf("Failed to start node: %v", err)
+		logger.Error("Failed to start node: %v", err)
+		os.Exit(1)
 	}
 
-	fmt.Printf("AegisKV node %s started\n", n.NodeID())
-	fmt.Printf("  Bind address: %s\n", cfg.BindAddr)
-	fmt.Printf("  Gossip address: %s\n", cfg.GossipBindAddr)
+	logger.Info("AegisKV node %s started", n.NodeID())
+	logger.Info("  Bind address: %s", cfg.BindAddr)
+	logger.Info("  Gossip address: %s", cfg.GossipBindAddr)
 	if cfg.GossipAdvertiseAddr != "" {
-		fmt.Printf("  Gossip advertise: %s\n", cfg.GossipAdvertiseAddr)
+		logger.Info("  Gossip advertise: %s", cfg.GossipAdvertiseAddr)
 	}
-	fmt.Printf("  Data directory: %s\n", cfg.DataDir)
-	fmt.Printf("  Shards: %d\n", cfg.NumShards)
-	fmt.Printf("  Replication factor: %d\n", cfg.ReplicationFactor)
-	fmt.Printf("  WAL mode: %s\n", cfg.WALMode)
-	fmt.Printf("  Max memory: %d MB\n", cfg.MaxMemoryMB)
+	logger.Info("  Data directory: %s", cfg.DataDir)
+	logger.Info("  Shards: %d", cfg.NumShards)
+	logger.Info("  Replication factor: %d", cfg.ReplicationFactor)
+	logger.Info("  WAL mode: %s", cfg.WALMode)
+	logger.Info("  Max memory: %d MB", cfg.MaxMemoryMB)
+	if cfg.TLSCertFile != "" {
+		logger.Info("  TLS: enabled")
+	}
+	if cfg.AuthToken != "" {
+		logger.Info("  Auth: enabled")
+	}
+	if cfg.HealthAddr != "" {
+		logger.Info("  Health endpoint: %s", cfg.HealthAddr)
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	sig := <-sigCh
-	fmt.Printf("\nReceived signal %v, shutting down...\n", sig)
+	logger.Info("Received signal %v, shutting down...", sig)
 
 	if err := n.Stop(); err != nil {
-		log.Printf("Error during shutdown: %v", err)
+		logger.Error("Error during shutdown: %v", err)
 	}
 
-	fmt.Println("Shutdown complete")
+	logger.Info("Shutdown complete")
 }

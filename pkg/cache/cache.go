@@ -4,21 +4,26 @@ package cache
 import (
 	"container/list"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/baxromumarov/aegisKV/pkg/types"
 )
 
 // Cache is an in-memory key-value store with LRU eviction and TTL support.
+// Optimized for read-heavy workloads using RLock for reads with buffered LRU promotions.
 type Cache struct {
-	mu       sync.RWMutex
-	items    map[string]*cacheItem
-	lruList  *list.List
-	maxBytes int64
-	curBytes int64
-	hits     uint64
-	misses   uint64
-	onEvict  func(key string, entry *types.Entry)
+	mu        sync.RWMutex
+	items     map[string]*cacheItem
+	lruList   *list.List
+	maxBytes  int64
+	curBytes  int64
+	hits      uint64 // atomic
+	misses    uint64 // atomic
+	onEvict   func(key string, entry *types.Entry)
+	promoteCh chan *list.Element
+	stopCh    chan struct{}
+	wg        sync.WaitGroup
 }
 
 type cacheItem struct {
@@ -32,11 +37,83 @@ type lruEntry struct {
 
 // NewCache creates a new cache with the specified maximum size in bytes.
 func NewCache(maxBytes int64) *Cache {
-	return &Cache{
-		items:    make(map[string]*cacheItem),
-		lruList:  list.New(),
-		maxBytes: maxBytes,
-		curBytes: 0,
+	c := &Cache{
+		items:     make(map[string]*cacheItem),
+		lruList:   list.New(),
+		maxBytes:  maxBytes,
+		curBytes:  0,
+		promoteCh: make(chan *list.Element, 256),
+		stopCh:    make(chan struct{}),
+	}
+
+	// Start the promotion drainer goroutine
+	c.wg.Add(1)
+	go c.promotionDrainer()
+
+	return c
+}
+
+// Close stops the cache's background goroutines.
+func (c *Cache) Close() {
+	close(c.stopCh)
+	c.wg.Wait()
+}
+
+// promotionDrainer drains the promotion channel in batches and applies MoveToFront.
+func (c *Cache) promotionDrainer() {
+	defer c.wg.Done()
+
+	ticker := time.NewTicker(500 * time.Microsecond)
+	defer ticker.Stop()
+
+	batch := make([]*list.Element, 0, 64)
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case elem := <-c.promoteCh:
+			batch = append(batch, elem)
+			// Drain any additional pending promotions
+		drain:
+			for {
+				select {
+				case e := <-c.promoteCh:
+					batch = append(batch, e)
+					if len(batch) >= 64 {
+						break drain
+					}
+				default:
+					break drain
+				}
+			}
+
+			// Apply promotions under write lock
+			if len(batch) > 0 {
+				c.mu.Lock()
+				for _, e := range batch {
+					// Check element is still in the list (not evicted)
+					if e.Value != nil {
+						c.lruList.MoveToFront(e)
+					}
+				}
+				c.mu.Unlock()
+				batch = batch[:0]
+			}
+
+		case <-ticker.C:
+			// Periodic flush of any pending promotions
+			if len(batch) > 0 {
+				c.mu.Lock()
+				for _, e := range batch {
+					if e.Value != nil {
+						c.lruList.MoveToFront(e)
+					}
+				}
+				c.mu.Unlock()
+				batch = batch[:0]
+			}
+		}
 	}
 }
 
@@ -47,26 +124,41 @@ func (c *Cache) SetEvictCallback(fn func(key string, entry *types.Entry)) {
 	c.onEvict = fn
 }
 
-// Get retrieves an entry from the cache.
+// Get retrieves an entry from the cache using RLock for better concurrency.
 func (c *Cache) Get(key string) *types.Entry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.mu.RLock()
 	item, ok := c.items[key]
 	if !ok {
-		c.misses++
+		c.mu.RUnlock()
+		atomic.AddUint64(&c.misses, 1)
 		return nil
 	}
 
 	if item.entry.IsExpired() {
-		c.deleteItem(key, item)
-		c.misses++
+		c.mu.RUnlock()
+		// Upgrade to write lock to delete expired entry
+		c.mu.Lock()
+		// Double-check after acquiring write lock
+		item, ok = c.items[key]
+		if ok && item.entry.IsExpired() {
+			c.deleteItem(key, item)
+		}
+		c.mu.Unlock()
+		atomic.AddUint64(&c.misses, 1)
 		return nil
 	}
 
-	c.lruList.MoveToFront(item.element)
-	c.hits++
-	return item.entry
+	// Queue LRU promotion (non-blocking)
+	select {
+	case c.promoteCh <- item.element:
+	default:
+		// Channel full, skip promotion this time
+	}
+
+	entry := item.entry
+	c.mu.RUnlock()
+	atomic.AddUint64(&c.hits, 1)
+	return entry
 }
 
 // Set stores an entry in the cache.
@@ -138,6 +230,7 @@ func (c *Cache) Delete(key string) *types.Entry {
 
 func (c *Cache) deleteItem(key string, item *cacheItem) {
 	c.lruList.Remove(item.element)
+	item.element.Value = nil // Mark as removed for promotion drainer
 	c.curBytes -= c.entrySize(key, item.entry)
 	delete(c.items, key)
 }
@@ -207,8 +300,8 @@ func (c *Cache) Stats() CacheStats {
 		Items:    len(c.items),
 		Bytes:    c.curBytes,
 		MaxBytes: c.maxBytes,
-		Hits:     c.hits,
-		Misses:   c.misses,
+		Hits:     atomic.LoadUint64(&c.hits),
+		Misses:   atomic.LoadUint64(&c.misses),
 	}
 }
 

@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/baxromumarov/aegisKV/pkg/protocol"
+	"github.com/baxromumarov/aegisKV/pkg/ratelimit"
 )
 
 // Handler processes incoming requests.
@@ -38,6 +40,11 @@ type Server struct {
 	maxConns     int
 	activeConns  int64
 	totalReqs    uint64
+	authToken    string
+	tlsConfig    *tls.Config
+	rateLimit    float64
+	rateBurst    int
+	workSem      chan struct{} // Bounded semaphore for backpressure
 }
 
 // Config holds server configuration.
@@ -47,6 +54,10 @@ type Config struct {
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 	MaxConns     int
+	AuthToken    string
+	TLSConfig    *tls.Config
+	RateLimit    float64
+	RateBurst    int
 }
 
 // New creates a new server.
@@ -69,22 +80,22 @@ func New(cfg Config) *Server {
 		readTimeout:  cfg.ReadTimeout,
 		writeTimeout: cfg.WriteTimeout,
 		maxConns:     cfg.MaxConns,
+		authToken:    cfg.AuthToken,
+		tlsConfig:    cfg.TLSConfig,
+		rateLimit:    cfg.RateLimit,
+		rateBurst:    cfg.RateBurst,
+		workSem:      make(chan struct{}, 1000), // Max 1000 concurrent requests
 	}
 }
 
 // Start starts the server.
 func (s *Server) Start() error {
-	// Use ListenConfig with SO_REUSEADDR to allow quick restarts
+	// Use ListenConfig with SO_REUSEADDR only (removed SO_REUSEPORT for security)
 	lc := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			var opErr error
 			if err := c.Control(func(fd uintptr) {
 				opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-				if opErr == nil {
-					// SO_REUSEPORT (15 on Linux) allows binding to same port if previous process crashed
-					const SO_REUSEPORT = 15
-					syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_REUSEPORT, 1) // Ignore error, not all systems support it
-				}
 			}); err != nil {
 				return err
 			}
@@ -96,6 +107,12 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
 	}
+
+	// Wrap with TLS if configured
+	if s.tlsConfig != nil {
+		ln = tls.NewListener(ln, s.tlsConfig)
+	}
+
 	s.listener = ln
 
 	s.wg.Add(1)
@@ -176,6 +193,18 @@ func (s *Server) handleConnection(conn net.Conn) {
 	decoder := protocol.NewDecoder(reader)
 	encoder := protocol.NewEncoder(writer)
 
+	// Create per-connection rate limiter if configured
+	var limiter *ratelimit.Limiter
+	if s.rateLimit > 0 {
+		burst := s.rateBurst
+		if burst <= 0 {
+			burst = int(s.rateLimit)
+		}
+		limiter = ratelimit.New(s.rateLimit, burst)
+	}
+
+	authenticated := s.authToken == "" // No auth required if token empty
+
 	for {
 		select {
 		case <-s.stopCh:
@@ -198,7 +227,77 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 		atomic.AddUint64(&s.totalReqs, 1)
 
+		// Handle AUTH command first (before authentication check)
+		if req.Command == protocol.CmdAuth {
+			resp := s.handleAuth(req)
+			if resp.Status == protocol.StatusOK {
+				authenticated = true
+			}
+			conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+			if err := encoder.EncodeResponse(resp); err != nil {
+				return
+			}
+			if err := writer.Flush(); err != nil {
+				return
+			}
+			continue
+		}
+
+		// Require authentication for all other commands
+		if !authenticated {
+			resp := &protocol.Response{
+				RequestID: req.RequestID,
+				Status:    protocol.StatusError,
+				Error:     "authentication required",
+			}
+			conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+			encoder.EncodeResponse(resp)
+			writer.Flush()
+			return
+		}
+
+		// Rate limiting
+		if limiter != nil && !limiter.Allow() {
+			resp := &protocol.Response{
+				RequestID: req.RequestID,
+				Status:    protocol.StatusError,
+				Error:     "rate limit exceeded",
+			}
+			conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+			if err := encoder.EncodeResponse(resp); err != nil {
+				return
+			}
+			if err := writer.Flush(); err != nil {
+				return
+			}
+			continue
+		}
+
+		// Backpressure - check if we can process this request
+		select {
+		case s.workSem <- struct{}{}:
+			// Got a slot, process the request
+		default:
+			// Server overloaded
+			resp := &protocol.Response{
+				RequestID: req.RequestID,
+				Status:    protocol.StatusError,
+				Error:     "server overloaded",
+			}
+			conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+			if err := encoder.EncodeResponse(resp); err != nil {
+				return
+			}
+			if err := writer.Flush(); err != nil {
+				return
+			}
+			continue
+		}
+
 		resp := s.processRequest(req)
+
+		// Release the semaphore slot
+		<-s.workSem
 
 		conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
 		if err := encoder.EncodeResponse(resp); err != nil {
@@ -210,6 +309,27 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 }
 
+// handleAuth handles authentication requests.
+func (s *Server) handleAuth(req *protocol.Request) *protocol.Response {
+	resp := &protocol.Response{
+		RequestID: req.RequestID,
+	}
+
+	if s.authToken == "" {
+		resp.Status = protocol.StatusOK
+		return resp
+	}
+
+	if string(req.Value) == s.authToken {
+		resp.Status = protocol.StatusOK
+	} else {
+		resp.Status = protocol.StatusError
+		resp.Error = "invalid token"
+	}
+
+	return resp
+}
+
 // processRequest processes a single request.
 func (s *Server) processRequest(req *protocol.Request) *protocol.Response {
 	resp := &protocol.Response{
@@ -218,138 +338,72 @@ func (s *Server) processRequest(req *protocol.Request) *protocol.Response {
 
 	switch req.Command {
 	case protocol.CmdGet:
-		return s.handleGet(req)
+		if !s.handler.IsPrimaryFor(req.Key) {
+			resp.Status = protocol.StatusRedirect
+			resp.NodeAddr = s.handler.GetRedirectAddr(req.Key)
+			return resp
+		}
+
+		value, ttl, version, found := s.handler.HandleGet(req.Key)
+		if !found {
+			resp.Status = protocol.StatusNotFound
+		} else {
+			resp.Status = protocol.StatusOK
+			resp.Value = value
+			resp.TTL = ttl
+			resp.Version = version
+		}
+
 	case protocol.CmdSet:
-		return s.handleSet(req)
+		if !s.handler.IsPrimaryFor(req.Key) {
+			resp.Status = protocol.StatusRedirect
+			resp.NodeAddr = s.handler.GetRedirectAddr(req.Key)
+			return resp
+		}
+
+		version, err := s.handler.HandleSet(req.Key, req.Value, req.TTL)
+		if err != nil {
+			resp.Status = protocol.StatusError
+			resp.Error = err.Error()
+		} else {
+			resp.Status = protocol.StatusOK
+			resp.Version = version
+		}
+
 	case protocol.CmdDel:
-		return s.handleDelete(req)
+		if !s.handler.IsPrimaryFor(req.Key) {
+			resp.Status = protocol.StatusRedirect
+			resp.NodeAddr = s.handler.GetRedirectAddr(req.Key)
+			return resp
+		}
+
+		if err := s.handler.HandleDelete(req.Key); err != nil {
+			resp.Status = protocol.StatusError
+			resp.Error = err.Error()
+		} else {
+			resp.Status = protocol.StatusOK
+		}
+
 	case protocol.CmdPing:
-		return s.handlePing(req)
+		resp.Status = protocol.StatusOK
+
 	case protocol.CmdReplicate:
-		return s.handleReplicate(req)
+		if err := s.handler.HandleReplicate(req); err != nil {
+			resp.Status = protocol.StatusError
+			resp.Error = err.Error()
+		} else {
+			resp.Status = protocol.StatusOK
+		}
+
 	case protocol.CmdStats:
-		return s.handleStats(req)
+		resp.Status = protocol.StatusOK
+
 	default:
 		resp.Status = protocol.StatusError
-		resp.Error = "unknown command"
+		resp.Error = fmt.Sprintf("unknown command: %d", req.Command)
 	}
 
 	return resp
-}
-
-// handleGet handles GET requests.
-func (s *Server) handleGet(req *protocol.Request) *protocol.Response {
-	resp := &protocol.Response{
-		RequestID: req.RequestID,
-		Key:       req.Key,
-	}
-
-	// Check if we should redirect (we're not the primary)
-	if !s.handler.IsPrimaryFor(req.Key) {
-		addr := s.handler.GetRedirectAddr(req.Key)
-		resp.Status = protocol.StatusRedirect
-		resp.NodeAddr = addr
-		return resp
-	}
-
-	value, ttl, version, found := s.handler.HandleGet(req.Key)
-	if !found {
-		resp.Status = protocol.StatusNotFound
-		return resp
-	}
-
-	resp.Status = protocol.StatusOK
-	resp.Value = value
-	resp.TTL = ttl
-	resp.Version = version
-
-	return resp
-}
-
-// handleSet handles SET requests.
-func (s *Server) handleSet(req *protocol.Request) *protocol.Response {
-	resp := &protocol.Response{
-		RequestID: req.RequestID,
-		Key:       req.Key,
-	}
-
-	if !s.handler.IsPrimaryFor(req.Key) {
-		addr := s.handler.GetRedirectAddr(req.Key)
-		resp.Status = protocol.StatusRedirect
-		resp.NodeAddr = addr
-		return resp
-	}
-
-	version, err := s.handler.HandleSet(req.Key, req.Value, req.TTL)
-	if err != nil {
-		resp.Status = protocol.StatusError
-		resp.Error = err.Error()
-		return resp
-	}
-
-	resp.Status = protocol.StatusOK
-	resp.Version = version
-
-	return resp
-}
-
-// handleDelete handles DELETE requests.
-func (s *Server) handleDelete(req *protocol.Request) *protocol.Response {
-	resp := &protocol.Response{
-		RequestID: req.RequestID,
-		Key:       req.Key,
-	}
-
-	if !s.handler.IsPrimaryFor(req.Key) {
-		addr := s.handler.GetRedirectAddr(req.Key)
-		resp.Status = protocol.StatusRedirect
-		resp.NodeAddr = addr
-		return resp
-	}
-
-	if err := s.handler.HandleDelete(req.Key); err != nil {
-		resp.Status = protocol.StatusError
-		resp.Error = err.Error()
-		return resp
-	}
-
-	resp.Status = protocol.StatusOK
-
-	return resp
-}
-
-// handlePing handles PING requests.
-func (s *Server) handlePing(req *protocol.Request) *protocol.Response {
-	return &protocol.Response{
-		RequestID: req.RequestID,
-		Status:    protocol.StatusOK,
-	}
-}
-
-// handleReplicate handles REPLICATE requests.
-func (s *Server) handleReplicate(req *protocol.Request) *protocol.Response {
-	resp := &protocol.Response{
-		RequestID: req.RequestID,
-	}
-
-	if err := s.handler.HandleReplicate(req); err != nil {
-		resp.Status = protocol.StatusError
-		resp.Error = err.Error()
-		return resp
-	}
-
-	resp.Status = protocol.StatusOK
-	return resp
-}
-
-// handleStats handles STATS requests.
-func (s *Server) handleStats(req *protocol.Request) *protocol.Response {
-	stats := s.Stats()
-	return &protocol.Response{
-		RequestID: req.RequestID,
-		Status:    protocol.StatusOK,
-		Value:     []byte(fmt.Sprintf("connections:%d,requests:%d", stats.ActiveConns, stats.TotalRequests)),
-	}
 }
 
 // Stats returns server statistics.
@@ -364,12 +418,4 @@ func (s *Server) Stats() ServerStats {
 type ServerStats struct {
 	ActiveConns   int64
 	TotalRequests uint64
-}
-
-// Addr returns the server's address.
-func (s *Server) Addr() string {
-	if s.listener != nil {
-		return s.listener.Addr().String()
-	}
-	return s.addr
 }

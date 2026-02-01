@@ -274,3 +274,13 @@ func (m *Manager) RecomputeOwnership() (acquire []uint64, release []uint64) {
 
 	return acquire, release
 }
+
+// Close closes all shards and releases resources.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, shard := range m.shards {
+		shard.Close()
+	}
+}

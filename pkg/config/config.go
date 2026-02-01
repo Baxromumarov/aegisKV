@@ -1,7 +1,11 @@
+// Package config holds the configuration for an AegisKV node.
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -34,13 +38,14 @@ type Config struct {
 
 	// Gossip configuration
 	GossipBindAddr      string        `json:"gossip_bind_addr"`
-	GossipAdvertiseAddr string        `json:"gossip_advertise_addr"` // For containers/NAT
+	GossipAdvertiseAddr string        `json:"gossip_advertise_addr"`
 	GossipInterval      time.Duration `json:"gossip_interval"`
 	SuspectTimeout      time.Duration `json:"suspect_timeout"`
 	DeadTimeout         time.Duration `json:"dead_timeout"`
+	GossipSecret        string        `json:"gossip_secret"` // HMAC key for gossip message signing
 
 	// Server configuration
-	ClientAdvertiseAddr string        `json:"client_advertise_addr"` // Client-facing address for redirects
+	ClientAdvertiseAddr string        `json:"client_advertise_addr"`
 	ReadTimeout         time.Duration `json:"read_timeout"`
 	WriteTimeout        time.Duration `json:"write_timeout"`
 	MaxConns            int           `json:"max_conns"`
@@ -49,6 +54,31 @@ type Config struct {
 	ReplicationBatchSize    int           `json:"replication_batch_size"`
 	ReplicationBatchTimeout time.Duration `json:"replication_batch_timeout"`
 	ReplicationMaxRetries   int           `json:"replication_max_retries"`
+
+	// Authentication
+	AuthToken string `json:"auth_token"` // Shared secret. Empty = no auth.
+
+	// TLS configuration
+	TLSEnabled  bool   `json:"tls_enabled"`
+	TLSCertFile string `json:"tls_cert_file"`
+	TLSKeyFile  string `json:"tls_key_file"`
+	TLSCAFile   string `json:"tls_ca_file"`
+
+	// Health / metrics HTTP server
+	HealthAddr string `json:"health_addr"`
+
+	// Maintenance
+	MaintenanceInterval time.Duration `json:"maintenance_interval"`
+
+	// Rate limiting (per-connection)
+	RateLimit float64 `json:"rate_limit"` // Max ops/sec per connection. 0 = unlimited.
+	RateBurst int     `json:"rate_burst"` // Burst size for rate limiter.
+
+	// Logging
+	LogLevel string `json:"log_level"` // "debug", "info", "warn", "error"
+
+	// Runtime TLS config (not serialized)
+	TLSConfig *tls.Config `json:"-"`
 }
 
 // DefaultConfig returns a default configuration.
@@ -85,6 +115,10 @@ func DefaultConfig() *Config {
 		ReplicationBatchSize:    100,
 		ReplicationBatchTimeout: 10 * time.Millisecond,
 		ReplicationMaxRetries:   3,
+
+		HealthAddr:          ":7702",
+		MaintenanceInterval: 10 * time.Second,
+		LogLevel:            "info",
 	}
 }
 
@@ -122,6 +156,15 @@ func LoadFromEnv() *Config {
 	if v := os.Getenv("AEGIS_WAL_MODE"); v != "" {
 		cfg.WALMode = v
 	}
+	if v := os.Getenv("AEGIS_AUTH_TOKEN"); v != "" {
+		cfg.AuthToken = v
+	}
+	if v := os.Getenv("AEGIS_GOSSIP_SECRET"); v != "" {
+		cfg.GossipSecret = v
+	}
+	if v := os.Getenv("AEGIS_LOG_LEVEL"); v != "" {
+		cfg.LogLevel = v
+	}
 
 	return cfg
 }
@@ -149,9 +192,41 @@ func (c *Config) Validate() error {
 	if c.EvictionRatio <= 0 || c.EvictionRatio > 1 {
 		c.EvictionRatio = 0.9
 	}
-	// Ensure WALDir is derived from DataDir if not explicitly set
 	if c.WALDir == "" || c.WALDir == "./data/wal" {
 		c.WALDir = filepath.Join(c.DataDir, "wal")
+	}
+	if c.MaintenanceInterval <= 0 {
+		c.MaintenanceInterval = 10 * time.Second
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
+	}
+
+	// Build TLS configuration if certificate files are provided
+	if c.TLSCertFile != "" && c.TLSKeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(c.TLSCertFile, c.TLSKeyFile)
+		if err != nil {
+			return err
+		}
+		c.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		}
+		// Add CA for mTLS if provided
+		if c.TLSCAFile != "" {
+			caCert, err := os.ReadFile(c.TLSCAFile)
+			if err != nil {
+				return err
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(caCert) {
+				return fmt.Errorf("failed to parse TLS CA certificate")
+			}
+			c.TLSConfig.ClientCAs = pool
+			c.TLSConfig.ClientAuth = tls.RequireAndVerifyClientCert
+			c.TLSConfig.RootCAs = pool
+		}
+		c.TLSEnabled = true
 	}
 
 	return nil
@@ -175,7 +250,7 @@ func (c *Config) SaveToFile(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600)
 }
 
 // String returns a string representation of the config.
