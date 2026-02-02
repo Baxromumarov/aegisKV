@@ -12,6 +12,8 @@ A production-ready distributed in-memory key-value cache optimized for low laten
 - **Async Replication**: Primary-follower replication with configurable factor
 - **LRU Eviction**: Memory-bounded with segmented LRU eviction
 - **Optional Persistence**: Write-ahead log for durability
+- **TLS Support**: Mutual TLS for secure communication
+- **Authentication**: Token-based auth for clients and cluster
 
 ## Architecture
 
@@ -50,20 +52,20 @@ make build
 ### Run a Single Node
 
 ```bash
-./bin/aegis --client-addr :7000 --gossip-addr :7002
+./bin/aegis --bind :7700 --gossip :7701
 ```
 
 ### Run a Cluster
 
 ```bash
 # Terminal 1: First node
-./bin/aegis --id node1 --client-addr :7000 --gossip-addr :7002
+./bin/aegis --node-id node1 --bind :7700 --gossip :7701
 
 # Terminal 2: Second node (joins via seed)
-./bin/aegis --id node2 --client-addr :7010 --gossip-addr :7012 --seeds localhost:7002
+./bin/aegis --node-id node2 --bind :7710 --gossip :7711 --seeds localhost:7701
 
 # Terminal 3: Third node
-./bin/aegis --id node3 --client-addr :7020 --gossip-addr :7022 --seeds localhost:7002
+./bin/aegis --node-id node3 --bind :7720 --gossip :7721 --seeds localhost:7701
 ```
 
 ### Using the Client
@@ -72,28 +74,67 @@ make build
 package main
 
 import (
-    "context"
+    "fmt"
+    "log"
+    "time"
+
     "github.com/baxromumarov/aegisKV/pkg/client"
 )
 
 func main() {
-    cfg := client.DefaultConfig([]string{"localhost:7000"})
-    c, _ := client.New(cfg)
+    // Create a new client
+    c := client.New(client.Config{
+        Seeds:        []string{"localhost:7700", "localhost:7710", "localhost:7720"},
+        MaxConns:     10,
+        ConnTimeout:  5 * time.Second,
+        ReadTimeout:  5 * time.Second,
+        WriteTimeout: 5 * time.Second,
+        MaxRetries:   3,
+        // AuthToken: "your-secret-token",  // optional
+        // TLSConfig: &tls.Config{},        // optional
+    })
     defer c.Close()
 
-    ctx := context.Background()
-
     // Set a value
-    c.Set(ctx, "key", []byte("value"))
+    err := c.Set([]byte("user:1"), []byte(`{"name":"John"}`))
+    if err != nil {
+        log.Fatal(err)
+    }
 
-    // Set with TTL (5 seconds)
-    c.SetWithTTL(ctx, "temp-key", []byte("temp-value"), 5000)
+    // Set with TTL (expires in 1 hour)
+    err = c.SetWithTTL([]byte("session:abc"), []byte("token123"), time.Hour)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     // Get a value
-    value, _ := c.Get(ctx, "key")
+    value, err := c.Get([]byte("user:1"))
+    if err != nil {
+        if err == client.ErrNotFound {
+            fmt.Println("Key not found")
+        } else {
+            log.Fatal(err)
+        }
+    }
+    fmt.Printf("Value: %s\n", value)
+
+    // Get value with remaining TTL
+    value, ttl, err := c.GetWithTTL([]byte("session:abc"))
+    if err == nil {
+        fmt.Printf("Value: %s, TTL: %v\n", value, ttl)
+    }
 
     // Delete a value
-    c.Delete(ctx, "key")
+    err = c.Delete([]byte("user:1"))
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Ping a specific node
+    err = c.Ping("localhost:7700")
+    if err != nil {
+        log.Fatal(err)
+    }
 }
 ```
 
@@ -103,64 +144,132 @@ func main() {
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--id` | auto | Node ID |
-| `--client-addr` | :7000 | Client connection address |
-| `--cluster-addr` | :7001 | Cluster communication address |
-| `--gossip-addr` | :7002 | Gossip protocol address |
-| `--seeds` | | Comma-separated seed node addresses |
+| `--node-id` | hostname | Node ID |
+| `--bind` | 0.0.0.0:7700 | Client connection address |
+| `--gossip` | 0.0.0.0:7701 | Gossip protocol address |
+| `--gossip-advertise` | | Gossip advertise address (for NAT/containers) |
+| `--client-advertise` | | Client advertise address (for NAT/containers) |
+| `--seeds` | | Comma-separated seed node gossip addresses |
+| `--data-dir` | ./data | Data directory |
+| `--replication-factor` | 3 | Replication factor |
+| `--shards` | 256 | Number of shards |
+| `--max-memory` | 1024 | Maximum memory in MB |
 | `--wal` | off | WAL mode: off, write, fsync |
-| `--wal-dir` | ./data/wal | WAL directory |
+| `--auth-token` | | Shared authentication token |
+| `--tls-cert` | | Path to TLS certificate |
+| `--tls-key` | | Path to TLS private key |
+| `--tls-ca` | | Path to TLS CA certificate (for mTLS) |
+| `--gossip-secret` | | HMAC secret for gossip signing |
+| `--health-addr` | | HTTP health endpoint address (e.g. :8080) |
+| `--rate-limit` | 0 | Per-connection requests/sec (0=disabled) |
+| `--rate-burst` | 10 | Rate limit burst size |
+| `--log-level` | info | Log level: debug, info, warn, error |
+| `--write-quorum` | 0 | Write quorum (0=async, -1=all) |
+| `--read-quorum` | 0 | Read quorum (0=local only) |
+| `--drain-timeout` | 30s | Graceful shutdown timeout |
+| `--pid-file` | | Path to PID file |
 | `--config` | | Path to config file |
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `AEGIS_NODE_ID` | Node ID |
-| `AEGIS_CLIENT_ADDR` | Client address |
-| `AEGIS_CLUSTER_ADDR` | Cluster address |
-| `AEGIS_GOSSIP_ADDR` | Gossip address |
-| `AEGIS_SEED_NODES` | JSON array of seed nodes |
-| `AEGIS_WAL_MODE` | WAL mode |
-| `AEGIS_WAL_DIR` | WAL directory |
 
 ### Config File (JSON)
 
 ```json
 {
-  "nodeId": "node1",
-  "clientAddr": ":7000",
-  "clusterAddr": ":7001",
-  "gossipAddr": ":7002",
-  "seedNodes": ["host1:7002", "host2:7002"],
-  "replicationFactor": 3,
-  "virtualNodes": 100,
-  "numShards": 256,
-  "maxMemoryBytes": 1073741824,
-  "walMode": 0,
-  "walDir": "./data/wal"
+  "node_id": "node1",
+  "bind_addr": "0.0.0.0:7700",
+  "gossip_bind_addr": "0.0.0.0:7701",
+  "seeds": ["host1:7701", "host2:7701"],
+  "replication_factor": 3,
+  "virtual_nodes": 100,
+  "num_shards": 256,
+  "max_memory_mb": 1024,
+  "wal_mode": "off",
+  "wal_dir": "./data/wal",
+  "auth_token": "",
+  "tls_enabled": false,
+  "tls_cert_file": "",
+  "tls_key_file": "",
+  "health_addr": ":8080",
+  "log_level": "info",
+  "write_quorum": 0,
+  "read_quorum": 0,
+  "drain_timeout": "30s"
 }
 ```
 
-## API
+## Client API
 
-### Operations
+| Method | Description |
+|--------|-------------|
+| `New(cfg Config)` | Create a new client |
+| `Get(key []byte) ([]byte, error)` | Get value by key |
+| `GetWithTTL(key []byte) ([]byte, time.Duration, error)` | Get value + remaining TTL |
+| `Set(key, value []byte) error` | Set a key-value pair |
+| `SetWithTTL(key, value []byte, ttl time.Duration) error` | Set with expiration |
+| `Delete(key []byte) error` | Delete a key |
+| `Ping(addr string) error` | Health check a node |
+| `AddServer(addr string)` | Add a server to the pool |
+| `RemoveServer(addr string)` | Remove a server from the pool |
+| `Servers() []string` | List all known servers |
+| `Close() error` | Close all connections |
 
-| Operation | Description |
-|-----------|-------------|
-| `GET key` | Retrieve value for key |
-| `SET key value [ttl]` | Store value with optional TTL (ms) |
-| `DEL key` | Delete key |
+### Error Types
 
-### Consistency Model
+| Error | Description |
+|-------|-------------|
+| `ErrNotFound` | Key does not exist |
+| `ErrClosed` | Client has been closed |
+| `ErrTimeout` | Request timed out |
+| `ErrMaxRetries` | Maximum retry attempts exceeded |
+
+## Health Endpoints
+
+When `--health-addr` is configured, the following HTTP endpoints are available:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Liveness check |
+| `GET /ready` | Readiness check |
+| `GET /metrics` | Prometheus metrics |
+
+## Consistency Model
 
 - **Eventual Consistency** with session guarantees
 - **Read-your-writes** guarantee per connection
 - **No split-brain writes** (lease-based leadership)
 
-## Design Philosophy
+## Production Deployment
 
-> **One writer per shard.
-> Version everything.
-> Fail predictably.
-> Hide complexity from users.**
+### Recommended Settings
+
+```bash
+./bin/aegis \
+  --node-id node1 \
+  --bind 0.0.0.0:7700 \
+  --gossip 0.0.0.0:7701 \
+  --seeds node2:7701,node3:7701 \
+  --replication-factor 3 \
+  --shards 256 \
+  --max-memory 4096 \
+  --wal fsync \
+  --auth-token "your-secure-token" \
+  --tls-cert /path/to/cert.pem \
+  --tls-key /path/to/key.pem \
+  --health-addr :8080 \
+  --log-level info \
+  --drain-timeout 60s
+```
+
+### Docker
+
+```bash
+docker build -t aegiskv .
+docker run -p 7700:7700 -p 7701:7701 aegiskv
+```
+
+### Docker Compose (3-node cluster)
+
+```bash
+docker-compose up -d
+```
+
+
