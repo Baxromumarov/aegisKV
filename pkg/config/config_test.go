@@ -72,7 +72,7 @@ func TestConfigLoadFromFile(t *testing.T) {
 	configContent := `{
 		"node_id": "test-node",
 		"bind_addr": "192.168.1.100:7700",
-		"seeds": ["192.168.1.101:7700", "192.168.1.102:7700"],
+		"addrs": ["192.168.1.101:7700", "192.168.1.102:7700"],
 		"replication_factor": 3,
 		"num_shards": 256,
 		"max_memory_mb": 2048,
@@ -101,7 +101,7 @@ func TestConfigLoadFromFile(t *testing.T) {
 		t.Errorf("expected BindAddr '192.168.1.100:7700', got %q", cfg.BindAddr)
 	}
 	if len(cfg.Seeds) != 2 {
-		t.Errorf("expected 2 seeds, got %d", len(cfg.Seeds))
+		t.Errorf("expected 2 addrs, got %d", len(cfg.Seeds))
 	}
 	if cfg.ReplicationFactor != 3 {
 		t.Errorf("expected ReplicationFactor 3, got %d", cfg.ReplicationFactor)
@@ -293,7 +293,7 @@ func TestConfigClone(t *testing.T) {
 		t.Error("clone should not be affected by original modification")
 	}
 	if clone.Seeds[0] == "modified" {
-		t.Error("clone's seeds should not be affected by original modification")
+		t.Error("clone's addrs should not be affected by original modification")
 	}
 }
 

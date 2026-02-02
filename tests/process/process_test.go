@@ -555,7 +555,7 @@ func TestStartupRace(t *testing.T) {
 		t.Fatalf("Failed to start seed: %v", err)
 	}
 
-	seeds := []string{seedNode.GossipAddr}
+	addrs := []string{seedNode.GossipAddr}
 
 	// Start 5 nodes concurrently
 	var wg sync.WaitGroup
@@ -566,7 +566,7 @@ func TestStartupRace(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			nodeID := fmt.Sprintf("node-%d", idx)
-			_, err := cluster.StartNode(nodeID, seeds)
+			_, err := cluster.StartNode(nodeID, addrs)
 			if err != nil {
 				errCh <- fmt.Errorf("failed to start %s: %w", nodeID, err)
 			}

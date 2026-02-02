@@ -25,7 +25,7 @@ func main() {
 		gossipAdvertise = flag.String("gossip-advertise", "", "Address to advertise for gossip (for containers/NAT)")
 		clientAdvertise = flag.String("client-advertise", "", "Address to advertise for client redirects (for containers/NAT)")
 		dataDir         = flag.String("data-dir", "./data", "Data directory")
-		seeds           = flag.String("seeds", "", "Comma-separated list of seed nodes")
+		addrs           = flag.String("addrs", "", "Comma-separated list of seed nodes")
 		replFactor      = flag.Int("replication-factor", 3, "Replication factor")
 		numShards       = flag.Int("shards", 256, "Number of shards")
 		walMode         = flag.String("wal", "off", "WAL mode: off, write, fsync")
@@ -107,8 +107,8 @@ func main() {
 	if *dataDir != "" {
 		cfg.DataDir = *dataDir
 	}
-	if *seeds != "" {
-		cfg.Seeds = strings.Split(*seeds, ",")
+	if *addrs != "" {
+		cfg.Seeds = strings.Split(*addrs, ",")
 	}
 	if *replFactor != 3 {
 		cfg.ReplicationFactor = *replFactor

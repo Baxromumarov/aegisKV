@@ -114,7 +114,7 @@ func (c *Cluster) startNode(binaryPath string, index, port int, peers string) (*
 		"--bind", node.Addr,
 		"--gossip", fmt.Sprintf("127.0.0.1:%d", gossipPort),
 		"--data-dir", dataDir,
-		"--seeds", peers,
+		"--addrs", peers,
 		"--max-memory", "256",
 		"--log-level", "warn",
 	}

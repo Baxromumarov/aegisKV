@@ -84,7 +84,7 @@ for i in $(seq 1 $((NUM_NODES - 1))); do
         --node-id="node-$i" \
         --bind="127.0.0.1:$PORT" \
         --gossip="127.0.0.1:$GOSSIP_PORT" \
-        --seeds="$SEED_GOSSIP" \
+        --addrs="$SEED_GOSSIP" \
         --data-dir="/tmp/aegiskv-test-$i" \
         --shards=64 \
         --replication-factor=3 \

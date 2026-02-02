@@ -208,7 +208,10 @@ func (c *Cache) Set(key string, entry *types.Entry) {
 		item.entry = entry
 		c.lruList.MoveToFront(item.element)
 	} else {
-		element := c.lruList.PushFront(&lruEntry{hash: h, key: key})
+		element := c.lruList.PushFront(&lruEntry{
+			hash: h,
+			key:  key,
+		})
 		c.items[h] = &cacheItem{
 			entry:   entry,
 			element: element,

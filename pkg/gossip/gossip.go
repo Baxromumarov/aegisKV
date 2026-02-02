@@ -185,7 +185,7 @@ func (g *Gossip) Stop() error {
 }
 
 // Join joins the cluster using seed nodes.
-func (g *Gossip) Join(seeds []string) error {
+func (g *Gossip) Join(addrs []string) error {
 	selfInfo := types.NodeInfo{
 		ID:         g.nodeID,
 		Addr:       g.advertiseAddr,
@@ -201,7 +201,7 @@ func (g *Gossip) Join(seeds []string) error {
 		Timestamp:  time.Now().UnixNano(),
 	}
 
-	for _, seed := range seeds {
+	for _, seed := range addrs {
 		if seed == g.bindAddr || seed == g.advertiseAddr {
 			continue
 		}

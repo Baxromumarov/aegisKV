@@ -62,10 +62,10 @@ make build
 ./bin/aegis --node-id node1 --bind :7700 --gossip :7701
 
 # Terminal 2: Second node (joins via seed)
-./bin/aegis --node-id node2 --bind :7710 --gossip :7711 --seeds localhost:7701
+./bin/aegis --node-id node2 --bind :7710 --gossip :7711 --addrs localhost:7701
 
 # Terminal 3: Third node
-./bin/aegis --node-id node3 --bind :7720 --gossip :7721 --seeds localhost:7701
+./bin/aegis --node-id node3 --bind :7720 --gossip :7721 --addrs localhost:7701
 ```
 
 ### Using the Client
@@ -192,7 +192,7 @@ responses, err := pipe.Exec()
 | `--gossip` | 0.0.0.0:7701 | Gossip protocol address |
 | `--gossip-advertise` | | Gossip advertise address (for NAT/containers) |
 | `--client-advertise` | | Client advertise address (for NAT/containers) |
-| `--seeds` | | Comma-separated seed node gossip addresses |
+| `--addrs` | | Comma-separated seed node gossip addresses |
 | `--data-dir` | ./data | Data directory |
 | `--replication-factor` | 3 | Replication factor |
 | `--shards` | 256 | Number of shards |
@@ -220,7 +220,7 @@ responses, err := pipe.Exec()
   "node_id": "node1",
   "bind_addr": "0.0.0.0:7700",
   "gossip_bind_addr": "0.0.0.0:7701",
-  "seeds": ["host1:7701", "host2:7701"],
+  "addrs": ["host1:7701", "host2:7701"],
   "replication_factor": 3,
   "virtual_nodes": 100,
   "num_shards": 256,
@@ -289,7 +289,7 @@ When `--health-addr` is configured, the following HTTP endpoints are available:
   --node-id node1 \
   --bind 0.0.0.0:7700 \
   --gossip 0.0.0.0:7701 \
-  --seeds node2:7701,node3:7701 \
+  --addrs node2:7701,node3:7701 \
   --replication-factor 3 \
   --shards 256 \
   --max-memory 4096 \

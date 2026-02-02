@@ -138,7 +138,7 @@ Create `/etc/aegiskv/config.json`:
   "bind_addr": "0.0.0.0:7700",
   "data_dir": "/var/lib/aegiskv",
   
-  "seeds": [
+  "addrs": [
     "10.0.1.10:7701",
     "10.0.1.11:7701",
     "10.0.1.12:7701"
@@ -223,7 +223,7 @@ sudo systemctl start aegiskv
   "node_id": "node1",
   "bind_addr": "10.0.1.10:7700",
   "gossip_bind_addr": "10.0.1.10:7701",
-  "seeds": []
+  "addrs": []
 }
 ```
 
@@ -233,7 +233,7 @@ sudo systemctl start aegiskv
   "node_id": "node2",
   "bind_addr": "10.0.1.11:7700",
   "gossip_bind_addr": "10.0.1.11:7701",
-  "seeds": ["10.0.1.10:7701"]
+  "addrs": ["10.0.1.10:7701"]
 }
 ```
 
@@ -243,13 +243,13 @@ sudo systemctl start aegiskv
   "node_id": "node3",
   "bind_addr": "10.0.1.12:7700",
   "gossip_bind_addr": "10.0.1.12:7701",
-  "seeds": ["10.0.1.10:7701", "10.0.1.11:7701"]
+  "addrs": ["10.0.1.10:7701", "10.0.1.11:7701"]
 }
 ```
 
 ### Adding Nodes
 
-1. Configure new node with existing cluster seeds
+1. Configure new node with existing cluster addrs
 2. Start the node
 3. Wait for gossip membership convergence
 4. Shards will automatically rebalance

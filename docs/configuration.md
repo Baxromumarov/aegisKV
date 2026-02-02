@@ -88,7 +88,7 @@ Address advertised to clients for redirects. Useful when behind NAT or load bala
 
 ## Cluster Configuration
 
-### seeds
+### addrs
 
 **Type:** `[]string`  
 **Default:** `[]` (empty)  
@@ -98,7 +98,7 @@ List of seed node addresses for cluster discovery. At least one seed must be rea
 
 ```json
 {
-  "seeds": [
+  "addrs": [
     "10.0.1.10:7701",
     "10.0.1.11:7701",
     "10.0.1.12:7701"
@@ -714,7 +714,7 @@ Here's a complete production configuration:
   "data_dir": "/var/lib/aegiskv",
   "client_advertise_addr": "aegis-prod-1.internal:7700",
 
-  "seeds": [
+  "addrs": [
     "aegis-prod-1.internal:7701",
     "aegis-prod-2.internal:7701",
     "aegis-prod-3.internal:7701"

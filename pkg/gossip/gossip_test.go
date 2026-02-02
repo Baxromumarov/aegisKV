@@ -154,9 +154,9 @@ func TestGossipThreeNodes(t *testing.T) {
 	}()
 
 	// Join nodes to first node
-	seeds := []string{addr(ports[0])}
+	addrs := []string{addr(ports[0])}
 	for i := 1; i < 3; i++ {
-		nodes[i].Join(seeds)
+		nodes[i].Join(addrs)
 	}
 
 	// Wait for convergence (fast with test config)

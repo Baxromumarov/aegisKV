@@ -2,8 +2,8 @@
 package consistent
 
 import (
-	"maps"
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -113,7 +113,10 @@ func (hr *HashRing) AddNodeWithWeight(nodeID, addr string, weight int) {
 		hash := hashKey(vkey)
 		vnodes = append(vnodes, hash)
 		hr.vnodeToNode[hash] = nodeID
-		hr.ring = append(hr.ring, ringEntry{hash: hash, nodeID: nodeID})
+		hr.ring = append(hr.ring, ringEntry{
+			hash:   hash,
+			nodeID: nodeID,
+		})
 	}
 
 	hr.nodeToVNodes[nodeID] = vnodes
@@ -200,16 +203,6 @@ func (hr *HashRing) GetNodes(key []byte, count int) []string {
 	}
 
 	return nodes
-}
-
-func (hr *HashRing) search(target Hash) int {
-	idx := sort.Search(len(hr.ring), func(i int) bool {
-		return hr.ring[i].hash >= target
-	})
-	if idx >= len(hr.ring) {
-		idx = 0
-	}
-	return idx
 }
 
 // GetKeyHash returns the hash value for a key (no lock needed - pure function).

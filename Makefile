@@ -237,7 +237,7 @@ docker-test-internal:
 docker-bench:
 	@echo "Running benchmark inside Docker network..."
 	docker compose run --rm aegis-test \
-		--seeds=aegis-node1:7700,aegis-node2:7700,aegis-node3:7700,aegis-node4:7700,aegis-node5:7700 \
+		--addrs=aegis-node1:7700,aegis-node2:7700,aegis-node3:7700,aegis-node4:7700,aegis-node5:7700 \
 		--test=benchmark \
 		--ops=10000 \
 		--workers=20
@@ -290,11 +290,11 @@ run-node1: build
 
 # Run node 2 of a cluster
 run-node2: build
-	$(BUILD_DIR)/$(BINARY_NAME) --id node2 --client-addr :7010 --gossip-addr :7012 --seeds localhost:7002
+	$(BUILD_DIR)/$(BINARY_NAME) --id node2 --client-addr :7010 --gossip-addr :7012 --addrs localhost:7002
 
 # Run node 3 of a cluster
 run-node3: build
-	$(BUILD_DIR)/$(BINARY_NAME) --id node3 --client-addr :7020 --gossip-addr :7022 --seeds localhost:7002
+	$(BUILD_DIR)/$(BINARY_NAME) --id node3 --client-addr :7020 --gossip-addr :7022 --addrs localhost:7002
 
 # Download dependencies
 deps:

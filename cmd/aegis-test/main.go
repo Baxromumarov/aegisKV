@@ -14,13 +14,13 @@ import (
 )
 
 func main() {
-	var seeds string
+	var addrs string
 	var numOps int
 	var numWorkers int
 	var keyPrefix string
 	var testType string
 
-	flag.StringVar(&seeds, "seeds", "localhost:7700", "Comma-separated list of seed nodes")
+	flag.StringVar(&addrs, "addrs", "localhost:7700", "Comma-separated list of seed nodes")
 	flag.IntVar(&numOps, "ops", 1000, "Number of operations")
 	flag.IntVar(&numWorkers, "workers", 10, "Number of concurrent workers")
 	flag.StringVar(&keyPrefix, "prefix", "test-", "Key prefix")
@@ -28,7 +28,7 @@ func main() {
 	flag.Parse()
 
 	seedList := []string{}
-	for _, s := range splitSeeds(seeds) {
+	for _, s := range splitSeeds(addrs) {
 		seedList = append(seedList, s)
 	}
 
@@ -69,10 +69,10 @@ func main() {
 	fmt.Println("\n=== Test Complete ===")
 }
 
-func splitSeeds(seeds string) []string {
+func splitSeeds(addrs string) []string {
 	result := []string{}
 	current := ""
-	for _, c := range seeds {
+	for _, c := range addrs {
 		if c == ',' {
 			if current != "" {
 				result = append(result, current)
@@ -88,11 +88,11 @@ func splitSeeds(seeds string) []string {
 	return result
 }
 
-func testConnectivity(c *client.Client, seeds []string) {
+func testConnectivity(c *client.Client, addrs []string) {
 	_ = c
 	fmt.Println("--- Testing Connectivity ---")
 
-	for _, seed := range seeds {
+	for _, seed := range addrs {
 		// Try to do a simple operation against each seed
 		testClient := client.New(client.Config{
 			Seeds:       []string{seed},

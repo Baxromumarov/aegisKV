@@ -28,17 +28,17 @@ func NewTestCluster(t *testing.T, numNodes int) *TestCluster {
 		basePort: 17700 + rand.Intn(1000),
 	}
 
-	var seeds []string
+	var addrs []string
 	for i := 0; i < numNodes; i++ {
 		cfg := tc.createNodeConfig(i)
 		tc.configs = append(tc.configs, cfg)
 		if i == 0 {
-			seeds = append(seeds, cfg.GossipBindAddr)
+			addrs = append(addrs, cfg.GossipBindAddr)
 		}
 	}
 
 	for i := 1; i < numNodes; i++ {
-		tc.configs[i].Seeds = seeds
+		tc.configs[i].Seeds = addrs
 	}
 
 	return tc

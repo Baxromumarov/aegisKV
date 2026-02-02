@@ -108,16 +108,16 @@ func runChaosTest(t *testing.T, duration time.Duration) {
 	t.Logf("Cluster started with %d nodes", numNodes)
 
 	// Get client addresses
-	var seeds []string
+	var addrs []string
 	var nodeControllers []NodeController
 	for _, n := range cluster.Nodes() {
-		seeds = append(seeds, n.ClientAddr)
+		addrs = append(addrs, n.ClientAddr)
 		nodeControllers = append(nodeControllers, &ProcessNodeController{node: n})
 	}
 
 	// Create workload
 	workload := NewWorkload(WorkloadConfig{
-		Seeds:          seeds,
+		Seeds:          addrs,
 		NumWorkers:     20,
 		KeySpace:       10000,
 		ValueSize:      100,
@@ -396,10 +396,10 @@ func BenchmarkChaosOperations(b *testing.B) {
 		b.Fatalf("Failed to start cluster: %v", err)
 	}
 
-	var seeds []string
+	var addrs []string
 	var controllers []NodeController
 	for _, n := range cluster.Nodes() {
-		seeds = append(seeds, n.ClientAddr)
+		addrs = append(addrs, n.ClientAddr)
 		controllers = append(controllers, &ProcessNodeController{node: n})
 	}
 
@@ -416,7 +416,7 @@ func BenchmarkChaosOperations(b *testing.B) {
 	defer chaos.Stop()
 
 	workload := NewWorkload(WorkloadConfig{
-		Seeds:      seeds,
+		Seeds:      addrs,
 		NumWorkers: 1,
 		KeySpace:   1000,
 		ValueSize:  100,

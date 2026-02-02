@@ -401,7 +401,7 @@ If data appears corrupted:
 1. **Prepare new node:**
    ```bash
    # Install AegisKV
-   # Configure with existing seeds
+   # Configure with existing addrs
    ```
 
 2. **Start the new node:**
@@ -447,7 +447,7 @@ If you need to quickly add capacity:
    ```json
    {
      "node_id": "emergency-node-1",
-     "seeds": ["existing-node:7701"],
+     "addrs": ["existing-node:7701"],
      "max_memory_mb": 32768
    }
    ```

@@ -25,7 +25,7 @@ var (
 type Client struct {
 	mu           sync.RWMutex
 	pools        map[string]*connPool
-	seeds        []string
+	addrs        []string
 	maxConns     int
 	connTimeout  time.Duration
 	readTimeout  time.Duration
@@ -89,7 +89,7 @@ func New(cfg Config) *Client {
 
 	return &Client{
 		pools:        make(map[string]*connPool),
-		seeds:        cfg.Seeds,
+		addrs:        cfg.Seeds,
 		maxConns:     cfg.MaxConns,
 		connTimeout:  cfg.ConnTimeout,
 		readTimeout:  cfg.ReadTimeout,
@@ -286,12 +286,12 @@ func (c *Client) pickServer() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if len(c.seeds) == 0 {
+	if len(c.addrs) == 0 {
 		return ""
 	}
 
-	idx := int(atomic.AddUint64(&c.nextReqID, 1)) % len(c.seeds)
-	return c.seeds[idx]
+	idx := int(atomic.AddUint64(&c.nextReqID, 1)) % len(c.addrs)
+	return c.addrs[idx]
 }
 
 // getPool gets or creates a connection pool for an address.
@@ -441,12 +441,12 @@ func (c *Client) AddServer(addr string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, s := range c.seeds {
+	for _, s := range c.addrs {
 		if s == addr {
 			return
 		}
 	}
-	c.seeds = append(c.seeds, addr)
+	c.addrs = append(c.addrs, addr)
 }
 
 // RemoveServer removes a server from the client.
@@ -454,9 +454,9 @@ func (c *Client) RemoveServer(addr string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for i, s := range c.seeds {
+	for i, s := range c.addrs {
 		if s == addr {
-			c.seeds = append(c.seeds[:i], c.seeds[i+1:]...)
+			c.addrs = append(c.addrs[:i], c.addrs[i+1:]...)
 			break
 		}
 	}
@@ -475,8 +475,8 @@ func (c *Client) Servers() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	servers := make([]string, len(c.seeds))
-	copy(servers, c.seeds)
+	servers := make([]string, len(c.addrs))
+	copy(servers, c.addrs)
 	return servers
 }
 

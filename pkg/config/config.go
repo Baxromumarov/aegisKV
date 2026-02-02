@@ -21,7 +21,7 @@ type Config struct {
 	DataDir  string `json:"data_dir"`
 
 	// Cluster configuration
-	Seeds             []string `json:"seeds"`
+	Seeds             []string `json:"addrs"`
 	ReplicationFactor int      `json:"replication_factor"`
 	NumShards         int      `json:"num_shards"`
 	VirtualNodes      int      `json:"virtual_nodes"`

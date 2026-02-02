@@ -37,7 +37,7 @@ type Node struct {
 	walMode       string
 	numShards     int
 	replFactor    int
-	seeds         []string
+	addrs         []string
 	binaryPath    string
 	clientTimeout time.Duration
 }
@@ -150,7 +150,7 @@ func findBinary() string {
 }
 
 // StartNode starts a new node as an OS process.
-func (c *Cluster) StartNode(id string, seeds []string) (*Node, error) {
+func (c *Cluster) StartNode(id string, addrs []string) (*Node, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -178,7 +178,7 @@ func (c *Cluster) StartNode(id string, seeds []string) (*Node, error) {
 		walMode:       c.walMode,
 		numShards:     c.numShards,
 		replFactor:    c.replFactor,
-		seeds:         seeds,
+		addrs:         addrs,
 		exitCh:        make(chan struct{}),
 		clientTimeout: 5 * time.Second,
 	}
@@ -212,15 +212,15 @@ func (n *Node) Start() error {
 		"--wal=" + n.walMode,
 	}
 
-	if len(n.seeds) > 0 {
+	if len(n.addrs) > 0 {
 		seedStr := ""
-		for i, s := range n.seeds {
+		for i, s := range n.addrs {
 			if i > 0 {
 				seedStr += ","
 			}
 			seedStr += s
 		}
-		args = append(args, "--seeds="+seedStr)
+		args = append(args, "--addrs="+seedStr)
 	}
 
 	n.Cmd = exec.Command(n.binaryPath, args...)
@@ -576,15 +576,15 @@ func (c *Cluster) Client() *client.Client {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	seeds := make([]string, 0)
+	addrs := make([]string, 0)
 	for _, n := range c.nodes {
 		if n.IsRunning() {
-			seeds = append(seeds, n.ClientAddr)
+			addrs = append(addrs, n.ClientAddr)
 		}
 	}
 
 	return client.New(client.Config{
-		Seeds:        seeds,
+		Seeds:        addrs,
 		MaxConns:     20,
 		ConnTimeout:  5 * time.Second,
 		ReadTimeout:  5 * time.Second,
@@ -624,12 +624,12 @@ func (c *Cluster) StartCluster(numNodes int) error {
 		return fmt.Errorf("failed to start seed node: %w", err)
 	}
 
-	seeds := []string{seedNode.GossipAddr}
+	addrs := []string{seedNode.GossipAddr}
 
 	// Start remaining nodes
 	for i := 1; i < numNodes; i++ {
 		nodeID := fmt.Sprintf("node-%d", i)
-		_, err := c.StartNode(nodeID, seeds)
+		_, err := c.StartNode(nodeID, addrs)
 		if err != nil {
 			return fmt.Errorf("failed to start node %s: %w", nodeID, err)
 		}

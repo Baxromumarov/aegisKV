@@ -46,7 +46,7 @@ services:
             --gossip=0.0.0.0:7701
             --gossip-advertise=aegis-node2:7701
             --client-advertise=host.docker.internal:7710
-            --seeds=aegis-node1:7701
+            --addrs=aegis-node1:7701
             --data-dir=/data
             --shards=64
             --replication-factor=3
@@ -82,7 +82,7 @@ services:
             --gossip=0.0.0.0:7701
             --gossip-advertise=aegis-node3:7701
             --client-advertise=host.docker.internal:7720
-            --seeds=aegis-node1:7701
+            --addrs=aegis-node1:7701
             --data-dir=/data
             --shards=64
             --replication-factor=3
@@ -118,7 +118,7 @@ services:
             --gossip=0.0.0.0:7701
             --gossip-advertise=aegis-node4:7701
             --client-advertise=host.docker.internal:7730
-            --seeds=aegis-node1:7701
+            --addrs=aegis-node1:7701
             --data-dir=/data
             --shards=64
             --replication-factor=3
@@ -154,7 +154,7 @@ services:
             --gossip=0.0.0.0:7701
             --gossip-advertise=aegis-node5:7701
             --client-advertise=host.docker.internal:7740
-            --seeds=aegis-node1:7701
+            --addrs=aegis-node1:7701
             --data-dir=/data
             --shards=64
             --replication-factor=3
@@ -186,7 +186,7 @@ services:
         hostname: aegis-test
         entrypoint: ["/app/aegis-test"]
         command: >
-            --seeds=aegis-node1:7700,aegis-node2:7700,aegis-node3:7700,aegis-node4:7700,aegis-node5:7700
+            --addrs=aegis-node1:7700,aegis-node2:7700,aegis-node3:7700,aegis-node4:7700,aegis-node5:7700
             --test=all
             --ops=1000
             --workers=10

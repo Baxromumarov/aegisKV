@@ -22,8 +22,8 @@ func TestNewClient(t *testing.T) {
 	if c == nil {
 		t.Fatal("expected non-nil client")
 	}
-	if len(c.seeds) != 1 {
-		t.Errorf("expected 1 seed, got %d", len(c.seeds))
+	if len(c.addrs) != 1 {
+		t.Errorf("expected 1 seed, got %d", len(c.addrs))
 	}
 	if c.maxConns != 5 {
 		t.Errorf("expected maxConns 5, got %d", c.maxConns)
