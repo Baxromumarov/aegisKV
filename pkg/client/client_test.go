@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -575,4 +576,110 @@ func BenchmarkClientSet(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		c.Set(key, value)
 	}
+}
+
+// BenchmarkClientMGet benchmarks MGet (pipelined multi-get) operations.
+func BenchmarkClientMGet(b *testing.B) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatalf("failed to listen: %v", err)
+	}
+	defer l.Close()
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				decoder := protocol.NewDecoder(c)
+				encoder := protocol.NewEncoder(c)
+				for {
+					req, err := decoder.DecodeRequest()
+					if err != nil {
+						return
+					}
+					encoder.EncodeResponse(&protocol.Response{
+						Status:    protocol.StatusOK,
+						Value:     []byte("value"),
+						RequestID: req.RequestID,
+					})
+				}
+			}(conn)
+		}
+	}()
+
+	c := New(Config{
+		Seeds:    []string{l.Addr().String()},
+		MaxConns: 10,
+	})
+	defer c.Close()
+
+	// Create 100 keys for batch
+	keys := make([][]byte, 100)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("key-%d", i))
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		c.MGet(keys)
+	}
+
+	b.ReportMetric(float64(len(keys)), "keys/op")
+}
+
+// BenchmarkClientPipeline benchmarks Pipeline operations.
+func BenchmarkClientPipeline(b *testing.B) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatalf("failed to listen: %v", err)
+	}
+	defer l.Close()
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				decoder := protocol.NewDecoder(c)
+				encoder := protocol.NewEncoder(c)
+				for {
+					req, err := decoder.DecodeRequest()
+					if err != nil {
+						return
+					}
+					encoder.EncodeResponse(&protocol.Response{
+						Status:    protocol.StatusOK,
+						Value:     []byte("value"),
+						RequestID: req.RequestID,
+					})
+				}
+			}(conn)
+		}
+	}()
+
+	c := New(Config{
+		Seeds:    []string{l.Addr().String()},
+		MaxConns: 10,
+	})
+	defer c.Close()
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		pipe, _ := c.Pipeline()
+		for j := 0; j < 100; j++ {
+			pipe.Get([]byte(fmt.Sprintf("key-%d", j)))
+		}
+		pipe.Exec()
+	}
+
+	b.ReportMetric(100, "keys/op")
 }

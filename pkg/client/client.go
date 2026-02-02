@@ -479,3 +479,255 @@ func (c *Client) Servers() []string {
 	copy(servers, c.seeds)
 	return servers
 }
+
+// MGet retrieves multiple keys in a single pipelined request.
+// Returns a slice of values in the same order as keys. Missing keys have nil value.
+func (c *Client) MGet(keys [][]byte) ([][]byte, error) {
+	if c.closed {
+		return nil, ErrClosed
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
+	addr := c.pickServer()
+	pool := c.getPool(addr)
+
+	pc, err := pool.get()
+	if err != nil {
+		return nil, err
+	}
+
+	// Send all requests (pipelined)
+	pc.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
+	for _, key := range keys {
+		req := &protocol.Request{
+			Command:   protocol.CmdGet,
+			Key:       key,
+			RequestID: atomic.AddUint64(&c.nextReqID, 1),
+		}
+		if err := pc.encoder.EncodeRequest(req); err != nil {
+			pool.discard(pc)
+			return nil, fmt.Errorf("encode request: %w", err)
+		}
+	}
+
+	if err := pc.writer.Flush(); err != nil {
+		pool.discard(pc)
+		return nil, fmt.Errorf("flush: %w", err)
+	}
+
+	// Read all responses
+	pc.conn.SetReadDeadline(time.Now().Add(c.readTimeout))
+	values := make([][]byte, len(keys))
+	for i := range keys {
+		resp, err := pc.decoder.DecodeResponse()
+		if err != nil {
+			pool.discard(pc)
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+		if resp.Status == protocol.StatusOK {
+			values[i] = resp.Value
+		}
+		// StatusNotFound leaves values[i] as nil
+	}
+
+	pool.put(pc)
+	return values, nil
+}
+
+// MSet stores multiple key-value pairs in a single pipelined request.
+func (c *Client) MSet(pairs []KeyValue) error {
+	if c.closed {
+		return ErrClosed
+	}
+	if len(pairs) == 0 {
+		return nil
+	}
+
+	addr := c.pickServer()
+	pool := c.getPool(addr)
+
+	pc, err := pool.get()
+	if err != nil {
+		return err
+	}
+
+	// Send all requests (pipelined)
+	pc.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
+	for _, kv := range pairs {
+		req := &protocol.Request{
+			Command:   protocol.CmdSet,
+			Key:       kv.Key,
+			Value:     kv.Value,
+			TTL:       kv.TTL.Milliseconds(),
+			RequestID: atomic.AddUint64(&c.nextReqID, 1),
+		}
+		if err := pc.encoder.EncodeRequest(req); err != nil {
+			pool.discard(pc)
+			return fmt.Errorf("encode request: %w", err)
+		}
+	}
+
+	if err := pc.writer.Flush(); err != nil {
+		pool.discard(pc)
+		return fmt.Errorf("flush: %w", err)
+	}
+
+	// Read all responses
+	pc.conn.SetReadDeadline(time.Now().Add(c.readTimeout))
+	for range pairs {
+		resp, err := pc.decoder.DecodeResponse()
+		if err != nil {
+			pool.discard(pc)
+			return fmt.Errorf("decode response: %w", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			pool.discard(pc)
+			return fmt.Errorf("set failed: %s", resp.Error)
+		}
+	}
+
+	pool.put(pc)
+	return nil
+}
+
+// KeyValue represents a key-value pair for batch operations.
+type KeyValue struct {
+	Key   []byte
+	Value []byte
+	TTL   time.Duration
+}
+
+// Pipeline provides a way to send multiple commands and read responses later.
+// This allows for maximum throughput by reducing round-trips.
+type Pipeline struct {
+	client   *Client
+	pc       *poolConn
+	pool     *connPool
+	requests int
+	err      error
+}
+
+// Pipeline creates a new pipeline for batch operations.
+// Must call Exec() to send and Close() when done.
+func (c *Client) Pipeline() (*Pipeline, error) {
+	if c.closed {
+		return nil, ErrClosed
+	}
+
+	addr := c.pickServer()
+	pool := c.getPool(addr)
+
+	pc, err := pool.get()
+	if err != nil {
+		return nil, err
+	}
+
+	pc.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
+
+	return &Pipeline{
+		client: c,
+		pc:     pc,
+		pool:   pool,
+	}, nil
+}
+
+// Get queues a GET command.
+func (p *Pipeline) Get(key []byte) {
+	if p.err != nil {
+		return
+	}
+	req := &protocol.Request{
+		Command:   protocol.CmdGet,
+		Key:       key,
+		RequestID: atomic.AddUint64(&p.client.nextReqID, 1),
+	}
+	if err := p.pc.encoder.EncodeRequest(req); err != nil {
+		p.err = err
+		return
+	}
+	p.requests++
+}
+
+// Set queues a SET command.
+func (p *Pipeline) Set(key, value []byte) {
+	p.SetWithTTL(key, value, 0)
+}
+
+// SetWithTTL queues a SET command with TTL.
+func (p *Pipeline) SetWithTTL(key, value []byte, ttl time.Duration) {
+	if p.err != nil {
+		return
+	}
+	req := &protocol.Request{
+		Command:   protocol.CmdSet,
+		Key:       key,
+		Value:     value,
+		TTL:       ttl.Milliseconds(),
+		RequestID: atomic.AddUint64(&p.client.nextReqID, 1),
+	}
+	if err := p.pc.encoder.EncodeRequest(req); err != nil {
+		p.err = err
+		return
+	}
+	p.requests++
+}
+
+// Delete queues a DELETE command.
+func (p *Pipeline) Delete(key []byte) {
+	if p.err != nil {
+		return
+	}
+	req := &protocol.Request{
+		Command:   protocol.CmdDel,
+		Key:       key,
+		RequestID: atomic.AddUint64(&p.client.nextReqID, 1),
+	}
+	if err := p.pc.encoder.EncodeRequest(req); err != nil {
+		p.err = err
+		return
+	}
+	p.requests++
+}
+
+// Exec flushes all queued commands and returns their responses.
+func (p *Pipeline) Exec() ([]*protocol.Response, error) {
+	if p.err != nil {
+		p.pool.discard(p.pc)
+		return nil, p.err
+	}
+
+	if p.requests == 0 {
+		p.pool.put(p.pc)
+		return nil, nil
+	}
+
+	if err := p.pc.writer.Flush(); err != nil {
+		p.pool.discard(p.pc)
+		return nil, fmt.Errorf("flush: %w", err)
+	}
+
+	p.pc.conn.SetReadDeadline(time.Now().Add(p.client.readTimeout))
+	responses := make([]*protocol.Response, p.requests)
+	for i := 0; i < p.requests; i++ {
+		resp, err := p.pc.decoder.DecodeResponse()
+		if err != nil {
+			p.pool.discard(p.pc)
+			return responses[:i], fmt.Errorf("decode response %d: %w", i, err)
+		}
+		responses[i] = resp
+	}
+
+	p.pool.put(p.pc)
+	p.requests = 0
+	return responses, nil
+}
+
+// Close discards the pipeline without executing.
+func (p *Pipeline) Close() {
+	if p.pc != nil {
+		p.pool.discard(p.pc)
+		p.pc = nil
+	}
+}

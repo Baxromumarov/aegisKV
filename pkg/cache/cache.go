@@ -7,14 +7,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/baxromumarov/aegisKV/pkg/fasthash"
 	"github.com/baxromumarov/aegisKV/pkg/types"
 )
 
 // Cache is an in-memory key-value store with LRU eviction and TTL support.
 // Optimized for read-heavy workloads using RLock for reads with buffered LRU promotions.
+// Uses pre-hashed uint64 keys for faster map operations.
 type Cache struct {
 	mu        sync.RWMutex
-	items     map[string]*cacheItem
+	items     map[uint64]*cacheItem // pre-hashed key for faster lookup
 	lruList   *list.List
 	maxBytes  int64
 	curBytes  int64
@@ -32,13 +34,14 @@ type cacheItem struct {
 }
 
 type lruEntry struct {
-	key string
+	hash uint64 // pre-computed hash
+	key  string // original key for eviction callbacks
 }
 
 // NewCache creates a new cache with the specified maximum size in bytes.
 func NewCache(maxBytes int64) *Cache {
 	c := &Cache{
-		items:     make(map[string]*cacheItem),
+		items:     make(map[uint64]*cacheItem),
 		lruList:   list.New(),
 		maxBytes:  maxBytes,
 		curBytes:  0,
@@ -126,8 +129,10 @@ func (c *Cache) SetEvictCallback(fn func(key string, entry *types.Entry)) {
 
 // Get retrieves an entry from the cache using RLock for better concurrency.
 func (c *Cache) Get(key string) *types.Entry {
+	h := fasthash.Sum64String(key)
+
 	c.mu.RLock()
-	item, ok := c.items[key]
+	item, ok := c.items[h]
 	if !ok {
 		c.mu.RUnlock()
 		atomic.AddUint64(&c.misses, 1)
@@ -141,9 +146,9 @@ func (c *Cache) Get(key string) *types.Entry {
 		// Upgrade to write lock to delete expired entry
 		c.mu.Lock()
 		// Double-check after acquiring write lock
-		item, ok = c.items[key]
+		item, ok = c.items[h]
 		if ok && item.entry.IsExpired() {
-			c.deleteItem(key, item)
+			c.deleteItem(h, key, item)
 		}
 		c.mu.Unlock()
 		atomic.AddUint64(&c.misses, 1)
@@ -165,8 +170,10 @@ func (c *Cache) Get(key string) *types.Entry {
 // GetNoExpiry retrieves an entry without checking expiry (caller handles).
 // Use for hot paths where expiry is checked separately.
 func (c *Cache) GetNoExpiry(key string) *types.Entry {
+	h := fasthash.Sum64String(key)
+
 	c.mu.RLock()
-	item, ok := c.items[key]
+	item, ok := c.items[h]
 	if !ok {
 		c.mu.RUnlock()
 		atomic.AddUint64(&c.misses, 1)
@@ -188,19 +195,21 @@ func (c *Cache) GetNoExpiry(key string) *types.Entry {
 
 // Set stores an entry in the cache.
 func (c *Cache) Set(key string, entry *types.Entry) {
+	h := fasthash.Sum64String(key)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	entrySize := c.entrySize(key, entry)
 
-	if item, ok := c.items[key]; ok {
+	if item, ok := c.items[h]; ok {
 		oldSize := c.entrySize(key, item.entry)
 		c.curBytes += entrySize - oldSize
 		item.entry = entry
 		c.lruList.MoveToFront(item.element)
 	} else {
-		element := c.lruList.PushFront(&lruEntry{key: key})
-		c.items[key] = &cacheItem{
+		element := c.lruList.PushFront(&lruEntry{hash: h, key: key})
+		c.items[h] = &cacheItem{
 			entry:   entry,
 			element: element,
 		}
@@ -212,10 +221,12 @@ func (c *Cache) Set(key string, entry *types.Entry) {
 
 // SetWithVersion stores an entry only if the version is newer.
 func (c *Cache) SetWithVersion(key string, entry *types.Entry) bool {
+	h := fasthash.Sum64String(key)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if item, ok := c.items[key]; ok {
+	if item, ok := c.items[h]; ok {
 		if !entry.Version.IsNewerThan(item.entry.Version) {
 			return false
 		}
@@ -226,8 +237,8 @@ func (c *Cache) SetWithVersion(key string, entry *types.Entry) bool {
 		c.lruList.MoveToFront(item.element)
 	} else {
 		entrySize := c.entrySize(key, entry)
-		element := c.lruList.PushFront(&lruEntry{key: key})
-		c.items[key] = &cacheItem{
+		element := c.lruList.PushFront(&lruEntry{hash: h, key: key})
+		c.items[h] = &cacheItem{
 			entry:   entry,
 			element: element,
 		}
@@ -240,24 +251,26 @@ func (c *Cache) SetWithVersion(key string, entry *types.Entry) bool {
 
 // Delete removes an entry from the cache.
 func (c *Cache) Delete(key string) *types.Entry {
+	h := fasthash.Sum64String(key)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	item, ok := c.items[key]
+	item, ok := c.items[h]
 	if !ok {
 		return nil
 	}
 
 	entry := item.entry
-	c.deleteItem(key, item)
+	c.deleteItem(h, key, item)
 	return entry
 }
 
-func (c *Cache) deleteItem(key string, item *cacheItem) {
+func (c *Cache) deleteItem(hash uint64, key string, item *cacheItem) {
 	c.lruList.Remove(item.element)
 	item.element.Value = nil // Mark as removed for promotion drainer
 	c.curBytes -= c.entrySize(key, item.entry)
-	delete(c.items, key)
+	delete(c.items, hash)
 }
 
 func (c *Cache) entrySize(key string, entry *types.Entry) int64 {
@@ -274,13 +287,13 @@ func (c *Cache) evictIfNeeded() {
 		}
 
 		lruE := element.Value.(*lruEntry)
-		item := c.items[lruE.key]
+		item := c.items[lruE.hash]
 
 		if c.onEvict != nil {
 			c.onEvict(lruE.key, item.entry)
 		}
 
-		c.deleteItem(lruE.key, item)
+		c.deleteItem(lruE.hash, lruE.key, item)
 	}
 }
 
@@ -290,9 +303,10 @@ func (c *Cache) CleanExpired() int {
 	defer c.mu.Unlock()
 
 	removed := 0
-	for key, item := range c.items {
+	for hash, item := range c.items {
 		if item.entry.IsExpired() {
-			c.deleteItem(key, item)
+			lruE := item.element.Value.(*lruEntry)
+			c.deleteItem(hash, lruE.key, item)
 			removed++
 		}
 	}
@@ -354,8 +368,9 @@ func (c *Cache) Keys() []string {
 	defer c.mu.RUnlock()
 
 	keys := make([]string, 0, len(c.items))
-	for k := range c.items {
-		keys = append(keys, k)
+	for _, item := range c.items {
+		lruE := item.element.Value.(*lruEntry)
+		keys = append(keys, lruE.key)
 	}
 	return keys
 }
