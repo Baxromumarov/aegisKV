@@ -108,7 +108,7 @@ func main() {
 		cfg.DataDir = *dataDir
 	}
 	if *addrs != "" {
-		cfg.Seeds = strings.Split(*addrs, ",")
+		cfg.Addrs = strings.Split(*addrs, ",")
 	}
 	if *replFactor != 3 {
 		cfg.ReplicationFactor = *replFactor

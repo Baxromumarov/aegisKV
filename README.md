@@ -1,17 +1,16 @@
 # AegisKV
 
-A production-ready distributed in-memory key-value cache optimized for low latency, horizontal scalability, and predictable failure behavior.
+in-memory key-value cache 
 
 ## Features
 
-- **Horizontally Scalable**: Add or remove nodes without downtime
-- **Low Latency**: <1ms p99 latency in steady state
+- **Horizontally Scalable**: Add or remove nodes
 - **Fault Tolerant**: Automatic failover with lease-based elections
 - **Simple API**: GET/SET/DEL with optional TTL
 - **Consistent Hashing**: Minimal key redistribution on cluster changes
 - **Async Replication**: Primary-follower replication with configurable factor
 - **LRU Eviction**: Memory-bounded with segmented LRU eviction
-- **Optional Persistence**: Write-ahead log for durability
+- **Optional Persistence**: Write-ahead log 
 - **TLS Support**: Mutual TLS for secure communication
 - **Authentication**: Token-based auth for clients and cluster
 
@@ -84,7 +83,7 @@ import (
 func main() {
     // Create a new client
     c := client.New(client.Config{
-        Seeds:        []string{"localhost:7700", "localhost:7710", "localhost:7720"},
+        Addrs:        []string{"localhost:7700", "localhost:7710", "localhost:7720"},
         MaxConns:     10,
         ConnTimeout:  5 * time.Second,
         ReadTimeout:  5 * time.Second,
@@ -172,14 +171,6 @@ pipe.Delete([]byte("old-key"))
 responses, err := pipe.Exec()
 // responses[0] = GET result, responses[1] = SET result, etc.
 ```
-
-**Performance comparison (per connection):**
-
-| Method | Ops/sec | Improvement |
-|--------|---------|-------------|
-| Single Get/Set | ~70,000 | baseline |
-| MGet/MSet (100 keys) | ~156,000 | **2.2x faster** |
-| Pipeline (100 ops) | ~153,000 | **2.2x faster** |
 
 ## Configuration
 

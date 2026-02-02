@@ -59,7 +59,7 @@ type poolConn struct {
 
 // Config holds client configuration.
 type Config struct {
-	Seeds        []string
+	Addrs        []string
 	MaxConns     int
 	ConnTimeout  time.Duration
 	ReadTimeout  time.Duration
@@ -89,7 +89,7 @@ func New(cfg Config) *Client {
 
 	return &Client{
 		pools:        make(map[string]*connPool),
-		addrs:        cfg.Seeds,
+		addrs:        cfg.Addrs,
 		maxConns:     cfg.MaxConns,
 		connTimeout:  cfg.ConnTimeout,
 		readTimeout:  cfg.ReadTimeout,

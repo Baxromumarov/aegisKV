@@ -13,7 +13,7 @@ import (
 
 // WorkloadConfig configures the chaos workload generator.
 type WorkloadConfig struct {
-	Seeds          []string
+	Addrs          []string
 	NumWorkers     int
 	KeySpace       int           // Number of unique keys
 	ValueSize      int           // Size of values in bytes
@@ -92,7 +92,7 @@ func (w *Workload) Start(ctx context.Context) error {
 
 	// Create client
 	w.client = client.New(client.Config{
-		Seeds:        w.cfg.Seeds,
+		Addrs:        w.cfg.Addrs,
 		MaxConns:     w.cfg.NumWorkers * 2,
 		ConnTimeout:  5 * time.Second,
 		ReadTimeout:  5 * time.Second,
@@ -378,13 +378,13 @@ func (w *Workload) GetWrittenKeyCount() int {
 // Uses a dedicated client to a single seed to ensure consistency.
 // Returns: written, validated, notFound, wrongValue
 func (w *Workload) ValidatePostChaos(numKeys int) (written int, validated int, notFound int, wrongValue int) {
-	if len(w.cfg.Seeds) == 0 {
+	if len(w.cfg.Addrs) == 0 {
 		return 0, 0, 0, 0
 	}
 
 	// Create a fresh client for validation - use only first seed for consistency
 	valClient := client.New(client.Config{
-		Seeds:        w.cfg.Seeds[:1], // Only use first seed
+		Addrs:        w.cfg.Addrs[:1], // Only use first seed
 		MaxConns:     2,
 		ConnTimeout:  5 * time.Second,
 		ReadTimeout:  10 * time.Second,

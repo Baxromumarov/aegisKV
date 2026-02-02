@@ -21,7 +21,7 @@ type Config struct {
 	DataDir  string `json:"data_dir"`
 
 	// Cluster configuration
-	Seeds             []string `json:"addrs"`
+	Addrs             []string `json:"addrs"`
 	ReplicationFactor int      `json:"replication_factor"`
 	NumShards         int      `json:"num_shards"`
 	VirtualNodes      int      `json:"virtual_nodes"`
@@ -100,7 +100,7 @@ func DefaultConfig() *Config {
 		BindAddr: "0.0.0.0:7700",
 		DataDir:  "./data",
 
-		Seeds:             []string{},
+		Addrs:             []string{},
 		ReplicationFactor: 3,
 		NumShards:         256,
 		VirtualNodes:      100,

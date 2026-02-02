@@ -75,7 +75,7 @@ type Config struct {
 	AdvertiseAddr  string // Address to advertise to other nodes (for containers/NAT)
 	ClientAddr     string // Client-facing address for redirects
 	ClusterSecret  string // HMAC key for message signing (optional)
-	Seeds          []string
+	Addrs          []string
 	PingInterval   time.Duration
 	SuspectTimeout time.Duration
 	DeadTimeout    time.Duration

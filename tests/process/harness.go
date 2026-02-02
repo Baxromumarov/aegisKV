@@ -48,7 +48,7 @@ type NodeConfig struct {
 	ClientPort    int
 	GossipPort    int
 	DataDir       string
-	Seeds         []string
+	Addrs         []string
 	WALMode       string
 	NumShards     int
 	ReplFactor    int
@@ -464,7 +464,7 @@ func (n *Node) Output() []string {
 // Client returns a client connected to this node.
 func (n *Node) Client() *client.Client {
 	return client.New(client.Config{
-		Seeds:        []string{n.ClientAddr},
+		Addrs:        []string{n.ClientAddr},
 		MaxConns:     10,
 		ConnTimeout:  n.clientTimeout,
 		ReadTimeout:  n.clientTimeout,
@@ -584,7 +584,7 @@ func (c *Cluster) Client() *client.Client {
 	}
 
 	return client.New(client.Config{
-		Seeds:        addrs,
+		Addrs:        addrs,
 		MaxConns:     20,
 		ConnTimeout:  5 * time.Second,
 		ReadTimeout:  5 * time.Second,

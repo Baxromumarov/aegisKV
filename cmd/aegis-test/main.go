@@ -33,14 +33,14 @@ func main() {
 	}
 
 	fmt.Println("=== AegisKV Cluster Test ===")
-	fmt.Printf("Seeds: %v\n", seedList)
+	fmt.Printf("Addrs: %v\n", seedList)
 	fmt.Printf("Operations: %d\n", numOps)
 	fmt.Printf("Workers: %d\n", numWorkers)
 	fmt.Printf("Test type: %s\n", testType)
 	fmt.Println()
 
 	c := client.New(client.Config{
-		Seeds:        seedList,
+		Addrs:        seedList,
 		MaxConns:     numWorkers * 2,
 		ConnTimeout:  5 * time.Second,
 		ReadTimeout:  5 * time.Second,
@@ -95,7 +95,7 @@ func testConnectivity(c *client.Client, addrs []string) {
 	for _, seed := range addrs {
 		// Try to do a simple operation against each seed
 		testClient := client.New(client.Config{
-			Seeds:       []string{seed},
+			Addrs:       []string{seed},
 			ConnTimeout: 2 * time.Second,
 			MaxRetries:  1,
 		})

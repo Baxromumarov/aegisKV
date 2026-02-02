@@ -38,7 +38,7 @@ func NewTestCluster(t *testing.T, numNodes int) *TestCluster {
 	}
 
 	for i := 1; i < numNodes; i++ {
-		tc.configs[i].Seeds = addrs
+		tc.configs[i].Addrs = addrs
 	}
 
 	return tc
@@ -50,7 +50,7 @@ func (tc *TestCluster) createNodeConfig(index int) *config.Config {
 		BindAddr:          fmt.Sprintf("127.0.0.1:%d", tc.basePort+index),
 		GossipBindAddr:    fmt.Sprintf("127.0.0.1:%d", tc.basePort+100+index),
 		DataDir:           fmt.Sprintf("/tmp/aegiskv-test-%d-%d", tc.basePort, index),
-		Seeds:             []string{},
+		Addrs:             []string{},
 		ReplicationFactor: 3,
 		NumShards:         64,
 		VirtualNodes:      50,

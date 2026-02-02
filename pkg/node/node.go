@@ -140,8 +140,8 @@ func (n *Node) Start() error {
 		return fmt.Errorf("failed to start gossip: %w", err)
 	}
 
-	if len(n.cfg.Seeds) > 0 {
-		if err := n.gossiper.Join(n.cfg.Seeds); err != nil {
+	if len(n.cfg.Addrs) > 0 {
+		if err := n.gossiper.Join(n.cfg.Addrs); err != nil {
 			n.log.Warn("failed to join cluster: %v", err)
 		}
 	}

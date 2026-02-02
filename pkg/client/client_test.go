@@ -13,7 +13,7 @@ import (
 // TestNewClient tests creating a new client.
 func TestNewClient(t *testing.T) {
 	cfg := Config{
-		Seeds:    []string{"localhost:7700"},
+		Addrs:    []string{"localhost:7700"},
 		MaxConns: 5,
 	}
 
@@ -54,7 +54,7 @@ func TestNewClientDefaults(t *testing.T) {
 // TestClientClose tests closing the client.
 func TestClientClose(t *testing.T) {
 	c := New(Config{
-		Seeds: []string{"localhost:7700"},
+		Addrs: []string{"localhost:7700"},
 	})
 
 	err := c.Close()
@@ -227,7 +227,7 @@ func TestClientGetSet(t *testing.T) {
 	})
 
 	c := New(Config{
-		Seeds:    []string{server.Addr()},
+		Addrs:    []string{server.Addr()},
 		MaxConns: 2,
 	})
 	defer c.Close()
@@ -299,7 +299,7 @@ func TestClientDelete(t *testing.T) {
 	})
 
 	c := New(Config{
-		Seeds:    []string{server.Addr()},
+		Addrs:    []string{server.Addr()},
 		MaxConns: 2,
 	})
 	defer c.Close()
@@ -339,7 +339,7 @@ func TestClientPing(t *testing.T) {
 	})
 
 	c := New(Config{
-		Seeds: []string{server.Addr()},
+		Addrs: []string{server.Addr()},
 	})
 	defer c.Close()
 
@@ -363,7 +363,7 @@ func TestClientSetWithTTL(t *testing.T) {
 	})
 
 	c := New(Config{
-		Seeds: []string{server.Addr()},
+		Addrs: []string{server.Addr()},
 	})
 	defer c.Close()
 
@@ -390,7 +390,7 @@ func TestClientConcurrent(t *testing.T) {
 	})
 
 	c := New(Config{
-		Seeds:    []string{server.Addr()},
+		Addrs:    []string{server.Addr()},
 		MaxConns: 5,
 	})
 	defer c.Close()
@@ -412,7 +412,7 @@ func TestClientConcurrent(t *testing.T) {
 // TestClientConnectionError tests handling connection errors.
 func TestClientConnectionError(t *testing.T) {
 	c := New(Config{
-		Seeds:       []string{"127.0.0.1:1"}, // Invalid address
+		Addrs:       []string{"127.0.0.1:1"}, // Invalid address
 		ConnTimeout: 100 * time.Millisecond,
 		MaxRetries:  1,
 	})
@@ -437,7 +437,7 @@ func TestClientWithAuth(t *testing.T) {
 	})
 
 	c := New(Config{
-		Seeds:     []string{server.Addr()},
+		Addrs:     []string{server.Addr()},
 		AuthToken: "secret-token",
 	})
 	defer c.Close()
@@ -466,7 +466,7 @@ func TestClientRequestID(t *testing.T) {
 	})
 
 	c := New(Config{
-		Seeds: []string{server.Addr()},
+		Addrs: []string{server.Addr()},
 	})
 	defer c.Close()
 
@@ -518,7 +518,7 @@ func BenchmarkClientGet(b *testing.B) {
 	}()
 
 	c := New(Config{
-		Seeds:    []string{l.Addr().String()},
+		Addrs:    []string{l.Addr().String()},
 		MaxConns: 10,
 	})
 	defer c.Close()
@@ -564,7 +564,7 @@ func BenchmarkClientSet(b *testing.B) {
 	}()
 
 	c := New(Config{
-		Seeds:    []string{l.Addr().String()},
+		Addrs:    []string{l.Addr().String()},
 		MaxConns: 10,
 	})
 	defer c.Close()
@@ -612,7 +612,7 @@ func BenchmarkClientMGet(b *testing.B) {
 	}()
 
 	c := New(Config{
-		Seeds:    []string{l.Addr().String()},
+		Addrs:    []string{l.Addr().String()},
 		MaxConns: 10,
 	})
 	defer c.Close()
@@ -666,7 +666,7 @@ func BenchmarkClientPipeline(b *testing.B) {
 	}()
 
 	c := New(Config{
-		Seeds:    []string{l.Addr().String()},
+		Addrs:    []string{l.Addr().String()},
 		MaxConns: 10,
 	})
 	defer c.Close()

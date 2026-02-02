@@ -117,7 +117,7 @@ func runChaosTest(t *testing.T, duration time.Duration) {
 
 	// Create workload
 	workload := NewWorkload(WorkloadConfig{
-		Seeds:          addrs,
+		Addrs:          addrs,
 		NumWorkers:     20,
 		KeySpace:       10000,
 		ValueSize:      100,
@@ -416,7 +416,7 @@ func BenchmarkChaosOperations(b *testing.B) {
 	defer chaos.Stop()
 
 	workload := NewWorkload(WorkloadConfig{
-		Seeds:      addrs,
+		Addrs:      addrs,
 		NumWorkers: 1,
 		KeySpace:   1000,
 		ValueSize:  100,

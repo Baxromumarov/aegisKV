@@ -100,8 +100,8 @@ func TestConfigLoadFromFile(t *testing.T) {
 	if cfg.BindAddr != "192.168.1.100:7700" {
 		t.Errorf("expected BindAddr '192.168.1.100:7700', got %q", cfg.BindAddr)
 	}
-	if len(cfg.Seeds) != 2 {
-		t.Errorf("expected 2 addrs, got %d", len(cfg.Seeds))
+	if len(cfg.Addrs) != 2 {
+		t.Errorf("expected 2 addrs, got %d", len(cfg.Addrs))
 	}
 	if cfg.ReplicationFactor != 3 {
 		t.Errorf("expected ReplicationFactor 3, got %d", cfg.ReplicationFactor)
@@ -277,22 +277,22 @@ func TestConfigQuorum(t *testing.T) {
 func TestConfigClone(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.NodeID = "original"
-	cfg.Seeds = []string{"a", "b", "c"}
+	cfg.Addrs = []string{"a", "b", "c"}
 
 	// Clone by creating new and copying
 	clone := *cfg
-	clone.Seeds = make([]string, len(cfg.Seeds))
-	copy(clone.Seeds, cfg.Seeds)
+	clone.Addrs = make([]string, len(cfg.Addrs))
+	copy(clone.Addrs, cfg.Addrs)
 
 	// Modify original
 	cfg.NodeID = "modified"
-	cfg.Seeds[0] = "modified"
+	cfg.Addrs[0] = "modified"
 
 	// Clone should be unchanged
 	if clone.NodeID == "modified" {
 		t.Error("clone should not be affected by original modification")
 	}
-	if clone.Seeds[0] == "modified" {
+	if clone.Addrs[0] == "modified" {
 		t.Error("clone's addrs should not be affected by original modification")
 	}
 }

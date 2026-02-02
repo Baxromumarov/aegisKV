@@ -30,7 +30,7 @@ var dockerNodes = []string{
 
 func createClient(addrs ...string) *client.Client {
 	return client.New(client.Config{
-		Seeds:       addrs,
+		Addrs:       addrs,
 		MaxConns:    5,
 		ConnTimeout: 5 * time.Second,
 		MaxRetries:  3,

@@ -10,7 +10,7 @@ import (
 
 func main() {
 	c := client.New(client.Config{
-		Seeds:        []string{"localhost:7700"},
+		Addrs:        []string{"localhost:7700"},
 		MaxConns:     10,
 		ConnTimeout:  5 * time.Second,
 		ReadTimeout:  5 * time.Second,

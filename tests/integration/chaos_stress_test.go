@@ -934,7 +934,7 @@ func TestStressMemoryPressureEviction(t *testing.T) {
 			BindAddr:          fmt.Sprintf("127.0.0.1:%d", tc.basePort+i),
 			GossipBindAddr:    fmt.Sprintf("127.0.0.1:%d", tc.basePort+100+i),
 			DataDir:           fmt.Sprintf("/tmp/aegiskv-mem-test-%d-%d", tc.basePort, i),
-			Seeds:             []string{},
+			Addrs:             []string{},
 			ReplicationFactor: 3,
 			NumShards:         32,
 			VirtualNodes:      50,
@@ -950,7 +950,7 @@ func TestStressMemoryPressureEviction(t *testing.T) {
 			MaxConns:          1000,
 		}
 		if i > 0 {
-			cfg.Seeds = []string{fmt.Sprintf("127.0.0.1:%d", tc.basePort+100)}
+			cfg.Addrs = []string{fmt.Sprintf("127.0.0.1:%d", tc.basePort+100)}
 		}
 		tc.configs = append(tc.configs, cfg)
 	}
