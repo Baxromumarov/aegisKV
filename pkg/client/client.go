@@ -245,7 +245,7 @@ func (c *Client) doWithRetry(req *protocol.Request) (*protocol.Response, error) 
 	}
 
 	if lastErr != nil {
-		return nil, fmt.Errorf("%w: %v", ErrMaxRetries, lastErr)
+		return nil, fmt.Errorf("%v", lastErr)
 	}
 	return nil, ErrMaxRetries
 }
