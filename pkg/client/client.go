@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -436,15 +437,47 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// AddServer adds a server to the client.
-func (c *Client) AddServer(addr string) {
+var (
+	errServerNotFound    = errors.New("server not found")
+	errAlreadyExists     = errors.New("server already exists")
+)
+
+// AddServer adds a server to the client after verifying it's reachable.
+// Returns an error if the server is already in the list or unreachable.
+func (c *Client) AddServer(addr string) error {
+	c.mu.RLock()
+	exists := slices.Contains(c.addrs, addr)
+	c.mu.RUnlock()
+
+	if exists {
+		return errAlreadyExists
+	}
+
+	// Verify the server is reachable by pinging it
+	if err := c.Ping(addr); err != nil {
+		return fmt.Errorf("%w: %v", errServerNotFound, err)
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, s := range c.addrs {
-		if s == addr {
-			return
-		}
+	// Double-check after acquiring write lock
+	if slices.Contains(c.addrs, addr) {
+		return errAlreadyExists
+	}
+	
+	c.addrs = append(c.addrs, addr)
+	return nil
+}
+
+// AddServerUnchecked adds a server without verifying reachability.
+// Use this when you know the server will become available later.
+func (c *Client) AddServerUnchecked(addr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if slices.Contains(c.addrs, addr) {
+		return
 	}
 	c.addrs = append(c.addrs, addr)
 }
