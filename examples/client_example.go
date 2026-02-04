@@ -66,25 +66,36 @@ func main() {
 	numOps := 10000
 
 	start := time.Now()
-	for i := 0; i < numOps; i++ {
-		k := []byte(fmt.Sprintf("bench-key-%d", i))
-		v := []byte(fmt.Sprintf("bench-value-%d", i))
+	for i := range numOps {
+		k := fmt.Appendf(nil, "bench-key-%d", i)
+		v := fmt.Appendf(nil, "bench-value-%d", i)
 		if err := c.Set(k, v); err != nil {
 			log.Printf("Set failed: %v", err)
 		}
 	}
 	setDuration := time.Since(start)
-	fmt.Printf("SET: %d ops in %v (%.0f ops/sec)\n", numOps, setDuration, float64(numOps)/setDuration.Seconds())
+	fmt.Printf(
+		"SET: %d ops in %v (%.0f ops/sec)\n",
+		numOps,
+		setDuration,
+		float64(numOps)/setDuration.Seconds(),
+	)
 
 	start = time.Now()
-	for i := 0; i < numOps; i++ {
-		k := []byte(fmt.Sprintf("bench-key-%d", i))
+	for i := range numOps {
+		k := fmt.Appendf(nil, "bench-key-%d", i)
 		if _, err := c.Get(k); err != nil && err != client.ErrNotFound {
 			log.Printf("Get failed: %v", err)
 		}
 	}
 	getDuration := time.Since(start)
-	fmt.Printf("GET: %d ops in %v (%.0f ops/sec)\n", numOps, getDuration, float64(numOps)/getDuration.Seconds())
+
+	fmt.Printf(
+		"GET: %d ops in %v (%.0f ops/sec)\n",
+		numOps,
+		getDuration,
+		float64(numOps)/getDuration.Seconds(),
+	)
 
 	fmt.Println("\nExample complete!")
 }
